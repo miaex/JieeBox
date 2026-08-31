@@ -81,42 +81,44 @@ object WebUi {
             body {
               margin: 0; padding: 0;
               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-              background: #0f1117; color: #e8eaf0;
+              background: linear-gradient(180deg, #FCEBD6, #FEF3E6);
+              color: #2F3B52;
               min-height: 100vh;
             }
             header {
               padding: 24px 20px 16px; text-align: center;
-              background: linear-gradient(180deg, #171a23, #0f1117);
-              border-bottom: 1px solid #262a36;
+              background: linear-gradient(180deg, #FDE3C6, #FCEBD6);
+              border-bottom: 1px solid #F0D9BE;
             }
-            header h1 { margin: 0; font-size: 22px; letter-spacing: 0.5px; }
-            header p { margin: 4px 0 0; color: #8b90a0; font-size: 13px; }
+            header h1 { margin: 0; font-size: 22px; letter-spacing: 0.5px; color: #2F3B52; }
+            header p { margin: 4px 0 0; color: #8A796C; font-size: 13px; }
             .breadcrumb {
               max-width: 640px; margin: 12px auto 0; padding: 0 16px;
-              font-size: 13px; color: #8b90a0; display: flex; flex-wrap: wrap; gap: 4px;
+              font-size: 13px; color: #8A796C; display: flex; flex-wrap: wrap; gap: 4px;
             }
-            .breadcrumb a { color: #6e93ff; text-decoration: none; }
-            .breadcrumb span.sep { color: #565b6b; }
+            .breadcrumb a { color: #4A78C4; text-decoration: none; font-weight: 600; }
+            .breadcrumb span.sep { color: #D8C3A8; }
             main { max-width: 640px; margin: 0 auto; padding: 16px; }
             .file-row {
               display: flex; align-items: center; justify-content: space-between;
-              background: #171a23; border: 1px solid #262a36; border-radius: 12px;
+              background: #FFF8EE; border: 1px solid #F0D9BE; border-radius: 12px;
               padding: 12px 14px; margin-bottom: 10px;
+              box-shadow: 0 1px 2px rgba(201, 138, 90, 0.08);
             }
             .folder-row { text-decoration: none; color: inherit; }
-            .chevron { color: #565b6b; font-size: 18px; padding-left: 8px; }
+            .chevron { color: #E97142; font-size: 18px; padding-left: 8px; }
             .file-info { display: flex; align-items: center; gap: 10px; overflow: hidden; }
             .file-icon { font-size: 20px; }
-            .file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
-            .file-size { font-size: 12px; color: #8b90a0; flex-shrink: 0; }
+            .file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; color: #2F3B52; }
+            .file-size { font-size: 12px; color: #8A796C; flex-shrink: 0; }
             .dl-btn {
               flex-shrink: 0; margin-left: 10px; text-decoration: none;
-              background: #4f7cff; color: white; font-size: 13px; font-weight: 600;
+              background: #4A78C4; color: white; font-size: 13px; font-weight: 600;
               padding: 8px 14px; border-radius: 8px;
             }
-            .dl-btn:active { opacity: 0.8; }
-            .empty { text-align: center; color: #8b90a0; margin-top: 40px; }
-            footer { text-align: center; color: #565b6b; font-size: 11px; padding: 24px; }
+            .dl-btn:active { opacity: 0.8; background: #E97142; }
+            .empty { text-align: center; color: #8A796C; margin-top: 40px; }
+            footer { text-align: center; color: #B7A38C; font-size: 11px; padding: 24px; }
           </style>
         </head>
         <body>

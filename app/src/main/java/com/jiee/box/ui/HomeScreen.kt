@@ -118,7 +118,7 @@ fun HomeScreen(
             if (serverState.isRunning) {
                 Button(
                     onClick = onStop,
-                    colors = ButtonDefaults.buttonColors(containerColor = JieeRed),
+                    colors = ButtonDefaults.buttonColors(containerColor = JieeTerracottaDeep),
                     modifier = Modifier.fillMaxWidth().height(52.dp)
                 ) {
                     Text("🛑 ARRÊTER LA BOX", fontWeight = FontWeight.Bold)
@@ -135,7 +135,7 @@ fun HomeScreen(
             }
 
             serverState.error?.let {
-                Text(it, color = JieeRed, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                Text(it, color = JieeTerracottaDeep, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
             }
         }
     }
@@ -219,7 +219,7 @@ private fun StatusCard(state: BoxServerState, onCopyAddress: () -> Unit) {
             Box(
                 Modifier
                     .size(10.dp)
-                    .background(if (state.isRunning) JieeGreen else JieeRed, RoundedCornerShape(50))
+                    .background(if (state.isRunning) JieeTerracotta else JieeOutline, RoundedCornerShape(50))
             )
             Spacer(Modifier.width(8.dp))
             Text(
@@ -302,7 +302,7 @@ private fun FileRow(file: PublishedFile, onRemove: () -> Unit) {
             val folderLabel = if (file.folderPath.isNotEmpty()) "📁 ${file.folderPath.joinToString(" / ")} · " else ""
             Text(
                 folderLabel + file.size.toHumanSize() + if (!file.available) " · indisponible" else "",
-                color = if (file.available) JieeTextSecondary else JieeRed,
+                color = if (file.available) JieeTextSecondary else JieeTerracottaDeep,
                 fontSize = 11.sp
             )
         }
