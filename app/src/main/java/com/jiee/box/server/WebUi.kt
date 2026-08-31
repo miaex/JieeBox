@@ -228,10 +228,11 @@ object WebUi {
                     fill.style.background = '#F0824E';
                     fill.style.width = '100%';
                   } else {
-                    status.textContent = '❌ Échec';
+                    status.textContent = '❌ ' + xhr.status;
+                    row.title = xhr.responseText || 'Erreur inconnue';
                   }
                 };
-                xhr.onerror = function () { status.textContent = '❌ Échec'; };
+                xhr.onerror = function () { status.textContent = '❌ Réseau'; };
 
                 var formData = new FormData();
                 formData.append('file', file, file.name);

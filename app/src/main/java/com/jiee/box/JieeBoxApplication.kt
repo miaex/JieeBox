@@ -18,6 +18,13 @@ class JieeBoxApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // NanoHTTPD (used for the local server) writes multipart file uploads
+        // to a temp directory it reads from the "java.io.tmpdir" system
+        // property — which Android does not set to anything writable by
+        // default. Left unset, every upload from a client silently fails.
+        // cacheDir is always writable by this app, with no permission needed.
+        System.setProperty("java.io.tmpdir", cacheDir.absolutePath)
+
         fileRepository = FileRepository(this)
         receivedFileRepository = ReceivedFileRepository(this)
         settingsRepository = SettingsRepository(this)
