@@ -12,32 +12,41 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jiee.box.data.BoxSettings
 import com.jiee.box.data.PublishedFile
+import com.jiee.box.data.ReceivedFile
 import com.jiee.box.data.toHumanSize
 import com.jiee.box.service.BoxServerState
 import com.jiee.box.ui.theme.*
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun HomeScreen(
     files: List<PublishedFile>,
+    receivedFiles: List<ReceivedFile>,
     serverState: BoxServerState,
     settings: BoxSettings,
     totalSize: Long,
+    isImporting: Boolean,
     onAddFiles: () -> Unit,
     onAddFolder: () -> Unit,
     onRemoveFile: (String) -> Unit,
+    onRemoveFiles: (Set<String>) -> Unit,
+    onPublishReceived: (String) -> Unit,
+    onRemoveReceived: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onCopyAddress: () -> Unit,
     onSaveSettings: (BoxSettings) -> Unit
 ) {
     var showSettings by remember { mutableStateOf(false) }
+    var tabIndex by remember { mutableStateOf(0) }
 
     Scaffold(containerColor = JieeBackground) { padding ->
         Column(
@@ -68,49 +77,56 @@ fun HomeScreen(
 
             Spacer(Modifier.height(16.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            TabRow(
+                selectedTabIndex = tabIndex,
+                containerColor = JieeSurface,
+                contentColor = JieeBlue
             ) {
-                Text(
-                    "Fichiers publiés",
-                    fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = JieeTextPrimary
+                Tab(
+                    selected = tabIndex == 0,
+                    onClick = { tabIndex = 0 },
+                    text = { Text("Publiés (${files.size})") }
                 )
-                Text(
-                    "${files.size} fichier(s) · ${totalSize.toHumanSize()}",
-                    fontSize = 12.sp, color = JieeTextSecondary
+                Tab(
+                    selected = tabIndex == 1,
+                    onClick = { tabIndex = 1 },
+                    text = { Text("📥 Reçus (${receivedFiles.count { !it.published }})") }
                 )
             }
 
             Spacer(Modifier.height(8.dp))
 
-            if (files.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Aucun fichier pour le moment.", color = JieeTextSecondary)
+            if (tabIndex == 0) {
+                PublishedTab(
+                    files = files,
+                    totalSize = totalSize,
+                    onRemoveFile = onRemoveFile,
+                    onRemoveFiles = onRemoveFiles,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isImporting) {
+                    Text(
+                        "⏳ Importation en cours...",
+                        color = JieeTerracotta, fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 }
-            } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(files, key = { it.id }) { file ->
-                        FileRow(file, onRemove = { onRemoveFile(file.id) })
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = onAddFiles, enabled = !isImporting, modifier = Modifier.weight(1f)) {
+                        Text("+ Fichiers")
+                    }
+                    OutlinedButton(onClick = onAddFolder, enabled = !isImporting, modifier = Modifier.weight(1f)) {
+                        Text("+ Dossier")
                     }
                 }
-            }
-
-            Spacer(Modifier.height(12.dp))
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                OutlinedButton(onClick = onAddFiles, modifier = Modifier.weight(1f)) {
-                    Text("+ Fichiers")
-                }
-                OutlinedButton(onClick = onAddFolder, modifier = Modifier.weight(1f)) {
-                    Text("+ Dossier")
-                }
+            } else {
+                ReceivedTab(
+                    receivedFiles = receivedFiles,
+                    onPublish = onPublishReceived,
+                    onRemove = onRemoveReceived,
+                    modifier = Modifier.weight(1f)
+                )
             }
 
             Spacer(Modifier.height(10.dp))
@@ -150,6 +166,123 @@ fun HomeScreen(
                 showSettings = false
             }
         )
+    }
+}
+
+@Composable
+private fun PublishedTab(
+    files: List<PublishedFile>,
+    totalSize: Long,
+    onRemoveFile: (String) -> Unit,
+    onRemoveFiles: (Set<String>) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+
+    // Keep the selection in sync if the underlying list changes (e.g. a file
+    // disappears after refreshAvailability, or the bulk-delete just ran).
+    LaunchedEffect(files) {
+        val validIds = files.map { it.id }.toSet()
+        val filtered = selectedIds.filter { it in validIds }.toSet()
+        if (filtered != selectedIds) selectedIds = filtered
+    }
+
+    Column(modifier = modifier) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Accessibles aux clients", fontSize = 12.sp, color = JieeTextSecondary)
+            Text(totalSize.toHumanSize(), fontSize = 12.sp, color = JieeTextSecondary)
+        }
+
+        if (files.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = {
+                    selectionMode = !selectionMode
+                    if (!selectionMode) selectedIds = emptySet()
+                }) {
+                    Text(if (selectionMode) "Annuler" else "☑️ Sélectionner", fontSize = 12.sp, color = JieeBlue)
+                }
+                if (selectionMode) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = {
+                            selectedIds = if (selectedIds.size == files.size) emptySet()
+                            else files.map { it.id }.toSet()
+                        }) {
+                            Text(
+                                if (selectedIds.size == files.size) "Aucun" else "Tout (${files.size})",
+                                fontSize = 12.sp, color = JieeBlue
+                            )
+                        }
+                        if (selectedIds.isNotEmpty()) {
+                            TextButton(onClick = {
+                                onRemoveFiles(selectedIds)
+                                selectedIds = emptySet()
+                                selectionMode = false
+                            }) {
+                                Text("Supprimer (${selectedIds.size})", fontSize = 12.sp, color = JieeTerracottaDeep)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+
+        if (files.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("Aucun fichier pour le moment.", color = JieeTextSecondary)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(files, key = { it.id }) { file ->
+                    FileRow(
+                        file = file,
+                        selectionMode = selectionMode,
+                        selected = file.id in selectedIds,
+                        onToggleSelect = {
+                            selectedIds = if (file.id in selectedIds) selectedIds - file.id else selectedIds + file.id
+                        },
+                        onRemove = { onRemoveFile(file.id) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReceivedTab(
+    receivedFiles: List<ReceivedFile>,
+    onPublish: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Text(
+            "Fichiers envoyés par des appareils clients — restent privés tant que tu ne cliques pas sur \"Publier\".",
+            fontSize = 11.sp, color = JieeTextSecondary,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        if (receivedFiles.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("Aucun fichier reçu pour le moment.", color = JieeTextSecondary)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(receivedFiles, key = { it.id }) { file ->
+                    ReceivedFileRow(file, onPublish = { onPublish(file.id) }, onRemove = { onRemove(file.id) })
+                }
+            }
+        }
     }
 }
 
@@ -284,16 +417,27 @@ private fun StatusCard(state: BoxServerState, onCopyAddress: () -> Unit) {
 }
 
 @Composable
-private fun FileRow(file: PublishedFile, onRemove: () -> Unit) {
+private fun FileRow(
+    file: PublishedFile,
+    selectionMode: Boolean,
+    selected: Boolean,
+    onToggleSelect: () -> Unit,
+    onRemove: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .background(JieeSurface, RoundedCornerShape(10.dp))
+            .let { if (selectionMode) it.clickable { onToggleSelect() } else it }
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        if (selectionMode) {
+            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
+            Spacer(Modifier.width(4.dp))
+        }
         Column(Modifier.weight(1f)) {
             Text(
                 file.displayName, color = JieeTextPrimary, fontSize = 14.sp,
@@ -306,8 +450,42 @@ private fun FileRow(file: PublishedFile, onRemove: () -> Unit) {
                 fontSize = 11.sp
             )
         }
-        TextButton(onClick = onRemove) {
-            Text("Retirer", color = JieeTextSecondary, fontSize = 12.sp)
+        if (!selectionMode) {
+            TextButton(onClick = onRemove) {
+                Text("Retirer", color = JieeTextSecondary, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+private val receivedDateFormat = SimpleDateFormat("dd/MM HH:mm", Locale.FRANCE)
+
+@Composable
+private fun ReceivedFileRow(file: ReceivedFile, onPublish: () -> Unit, onRemove: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .background(JieeSurface, RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text(file.displayName, color = JieeTextPrimary, fontSize = 14.sp, maxLines = 1)
+        Text(
+            "${file.size.toHumanSize()} · ${receivedDateFormat.format(Date(file.receivedAt))} · depuis ${file.fromIp}" +
+                if (file.published) " · publié" else "",
+            color = if (file.published) JieeTerracotta else JieeTextSecondary,
+            fontSize = 11.sp
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (!file.published) {
+                OutlinedButton(onClick = onPublish, modifier = Modifier.height(34.dp)) {
+                    Text("Publier", fontSize = 12.sp)
+                }
+            }
+            TextButton(onClick = onRemove, modifier = Modifier.height(34.dp)) {
+                Text("Supprimer", color = JieeTerracottaDeep, fontSize = 12.sp)
+            }
         }
     }
 }

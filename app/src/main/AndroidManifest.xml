@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Only needed on Android 9 and below to write into the public Downloads
+         folder when receiving an upload from a client; Android 10+ uses the
+         scoped-storage MediaStore API instead, which needs no permission. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
     <!-- Needed to keep the server alive reliably while the app is backgrounded. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

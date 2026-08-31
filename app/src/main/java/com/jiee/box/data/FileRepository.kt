@@ -34,7 +34,7 @@ class FileRepository(private val context: Context) {
     /** Add one or more SAF-selected files (from OpenMultipleDocuments), shown at
      *  the root of the web client — they weren't part of any picked folder. */
     fun addFiles(uris: List<Uri>) {
-        publish(uris.map { it to emptyList() })
+        publish(uris.map { Entry(it, emptyList(), grantPermission = true) })
     }
 
     /** Add every file inside a picked SAF tree (folder), recursively, preserving
@@ -51,47 +51,69 @@ class FileRepository(private val context: Context) {
         }
         val root = DocumentFile.fromTreeUri(context, treeUri) ?: return
         val rootName = root.name ?: "Dossier"
-        val collected = mutableListOf<Pair<Uri, List<String>>>()
+        val collected = mutableListOf<Entry>()
         collectFilesRecursively(root, listOf(rootName), collected)
         publish(collected)
     }
 
+    /** Directly registers a file we already have trustworthy metadata for
+     *  (e.g. one we just saved ourselves via MediaStore after a client
+     *  upload) — skips the SAF/DocumentFile lookup entirely, since that path
+     *  assumes a document picked through the Storage Access Framework. */
+    fun addKnownFile(uri: String, displayName: String, size: Long, mimeType: String, folderPath: List<String> = emptyList()) {
+        val id = PublishedFile.idFor(uri)
+        if (_files.none { it.id == id }) {
+            _files.add(PublishedFile(id, uri, displayName, size, mimeType, folderPath, available = true))
+            saveToDisk()
+        }
+    }
+
+    private data class Entry(val uri: Uri, val folderPath: List<String>, val grantPermission: Boolean)
+
     private fun collectFilesRecursively(
         dir: DocumentFile,
         path: List<String>,
-        out: MutableList<Pair<Uri, List<String>>>
+        out: MutableList<Entry>
     ) {
         for (child in dir.listFiles()) {
             if (child.isDirectory) {
                 collectFilesRecursively(child, path + (child.name ?: "dossier"), out)
             } else if (child.isFile) {
-                out.add(child.uri to path)
+                // grantPermission = false: this file's access already comes from
+                // the ONE persistable grant taken on the parent tree above —
+                // requesting it again per-file is redundant, slow at scale (was
+                // the direct cause of a crash/ANR importing ~3000 files at
+                // once), and silently exhausts Android's ~128-grant-per-app quota.
+                out.add(Entry(child.uri, path, grantPermission = false))
             }
         }
     }
 
-    /** Shared publish logic: persists permission, reads metadata, avoids duplicates. */
-    private fun publish(entries: List<Pair<Uri, List<String>>>) {
-        for ((uri, folderPath) in entries) {
-            try {
-                // Persist read access across reboots / app restarts (section 14 of the spec).
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (_: SecurityException) {
-                // Some providers don't support persistable permissions; the file will
-                // still work for this session, but may need re-selecting after a restart.
+    /** Shared publish logic: persists permission (only when actually needed),
+     *  reads metadata, avoids duplicates. */
+    private fun publish(entries: List<Entry>) {
+        for (entry in entries) {
+            if (entry.grantPermission) {
+                try {
+                    // Persist read access across reboots / app restarts (section 14 of the spec).
+                    context.contentResolver.takePersistableUriPermission(
+                        entry.uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: SecurityException) {
+                    // Some providers don't support persistable permissions; the file will
+                    // still work for this session, but may need re-selecting after a restart.
+                }
             }
 
-            val doc = DocumentFile.fromSingleUri(context, uri) ?: continue
-            val name = doc.name ?: queryDisplayName(uri) ?: uri.lastPathSegment ?: "fichier"
+            val doc = DocumentFile.fromSingleUri(context, entry.uri) ?: continue
+            val name = doc.name ?: queryDisplayName(entry.uri) ?: entry.uri.lastPathSegment ?: "fichier"
             val size = doc.length()
             val mime = doc.type ?: "application/octet-stream"
-            val id = PublishedFile.idFor(uri.toString())
+            val id = PublishedFile.idFor(entry.uri.toString())
 
             if (_files.none { it.id == id }) {
-                _files.add(PublishedFile(id, uri.toString(), name, size, mime, folderPath, available = true))
+                _files.add(PublishedFile(id, entry.uri.toString(), name, size, mime, entry.folderPath, available = true))
             }
         }
         saveToDisk()
@@ -100,6 +122,15 @@ class FileRepository(private val context: Context) {
     /** Remove a file from the published list. Never touches the file on disk. */
     fun removeFile(id: String) {
         _files.removeAll { it.id == id }
+        saveToDisk()
+    }
+
+    /** Bulk removal — one disk write for the whole batch, not one per file,
+     *  so clearing hundreds/thousands of entries stays fast and doesn't
+     *  hammer SharedPreferences. */
+    fun removeFiles(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        _files.removeAll { it.id in ids }
         saveToDisk()
     }
 
@@ -112,17 +143,29 @@ class FileRepository(private val context: Context) {
      */
     fun refreshAvailability() {
         val updated = _files.map { pf ->
-            val stillThere = try {
-                val doc = DocumentFile.fromSingleUri(context, Uri.parse(pf.uri))
-                doc != null && doc.exists()
-            } catch (_: Exception) {
-                false
-            }
-            if (stillThere != pf.available) pf.copy(available = stillThere) else pf
+            if (checkFileExists(Uri.parse(pf.uri)) != pf.available) pf.copy(available = !pf.available) else pf
         }
         _files.clear()
         _files.addAll(updated)
         saveToDisk()
+    }
+
+    /** DocumentFile assumes a SAF document; files added via [addKnownFile]
+     *  (e.g. MediaStore-origin uploads) aren't necessarily one, so this falls
+     *  back to a plain ContentResolver query when the DocumentFile check is
+     *  inconclusive, instead of wrongly marking them unavailable. */
+    private fun checkFileExists(uri: Uri): Boolean {
+        val viaDocumentFile = try {
+            DocumentFile.fromSingleUri(context, uri)?.exists() == true
+        } catch (_: Exception) {
+            false
+        }
+        if (viaDocumentFile) return true
+        return try {
+            resolver.query(uri, null, null, null, null)?.use { it.moveToFirst() } ?: false
+        } catch (_: Exception) {
+            false
+        }
     }
 
     val totalSize: Long get() = _files.sumOf { it.size }

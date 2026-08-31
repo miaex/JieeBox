@@ -52,17 +52,24 @@ class MainActivity : ComponentActivity() {
         setContent {
             JieeBoxTheme {
                 val files by viewModel.files.collectAsState()
+                val receivedFiles by viewModel.receivedFiles.collectAsState()
                 val serverState by viewModel.serverState.collectAsState()
                 val settings by viewModel.settings.collectAsState()
+                val isImporting by viewModel.isImporting.collectAsState()
 
                 HomeScreen(
                     files = files,
+                    receivedFiles = receivedFiles,
                     serverState = serverState,
                     settings = settings,
                     totalSize = viewModel.totalSize,
+                    isImporting = isImporting,
                     onAddFiles = { pickFiles.launch(arrayOf("*/*")) },
                     onAddFolder = { pickFolder.launch(null) },
                     onRemoveFile = viewModel::removeFile,
+                    onRemoveFiles = viewModel::removeFiles,
+                    onPublishReceived = viewModel::publishReceivedFile,
+                    onRemoveReceived = viewModel::removeReceivedFile,
                     onStart = viewModel::startBox,
                     onStop = viewModel::stopBox,
                     onCopyAddress = { copyAddressToClipboard(serverState.address) },

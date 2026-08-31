@@ -4,9 +4,17 @@ import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import com.jiee.box.data.FileRepository
+import com.jiee.box.data.ReceivedFile
+import com.jiee.box.data.ReceivedFileRepository
+import com.jiee.box.data.UploadStorage
 import fi.iki.elonen.NanoHTTPD
+import java.io.File
 import java.io.InputStream
+import java.io.PipedInputStream
+import java.io.PipedOutputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /**
  * The actual local file server. Built on NanoHTTPD (a small embeddable HTTP
@@ -15,14 +23,17 @@ import java.util.concurrent.ConcurrentHashMap
  * which is what lets several devices download at once (spec section 11)
  * without one big transfer blocking everything else.
  *
- * Two routes only, on purpose (V1 = simple & reliable, per spec section 19):
- *   GET /                 -> HTML listing of published files (WebUi)
- *   GET /download?id=xxx  -> streams one file, with HTTP Range support
+ * Routes:
+ *   GET  /                  -> HTML listing of the current folder (WebUi)
+ *   GET  /download?id=xxx   -> streams one published file, with HTTP Range support
+ *   GET  /zip?dir=A/B       -> streams a .zip of everything in that folder (V1.1)
+ *   POST /upload            -> client -> box upload (V2 bidirectional transfer)
  */
 class JieeHttpServer(
     port: Int,
     private val context: Context,
     private val repository: FileRepository,
+    private val receivedRepository: ReceivedFileRepository,
     private val boxName: String = "JIEE BOX",
     private val password: String? = null
 ) : NanoHTTPD(port) {
@@ -59,6 +70,8 @@ class JieeHttpServer(
             when {
                 session.uri == "/" || session.uri.isEmpty() -> serveIndex(session)
                 session.uri == "/download" -> serveDownload(session)
+                session.uri == "/zip" -> serveZip(session)
+                session.uri == "/upload" && session.method == Method.POST -> serveUpload(session)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
             }
         } catch (e: Exception) {
@@ -90,7 +103,8 @@ class JieeHttpServer(
     private fun serveIndex(session: IHTTPSession): Response {
         val dirParam = session.parms["dir"]
         val currentDir = dirParam?.split("/")?.filter { it.isNotBlank() } ?: emptyList()
-        val html = WebUi.render(boxName, repository.files, currentDir)
+        val sort = session.parms["sort"] ?: "name_asc"
+        val html = WebUi.render(boxName, repository.files, currentDir, sort)
         val response = newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
         addNoCacheHeaders(response)
         return response
@@ -160,6 +174,96 @@ class JieeHttpServer(
         response.addHeader("Content-Range", "bytes $start-$end/$totalLength")
         response.addHeader("Content-Disposition", contentDispositionFor(file.displayName))
         return response
+    }
+
+    /**
+     * Streams a .zip of every available file under the given folder (spec
+     * section 20, V1.1: "téléchargement de dossiers"). Built on the fly with
+     * a pipe so we never hold the whole archive in memory or on disk first —
+     * consistent with the streaming requirement for large content (section 10).
+     */
+    private fun serveZip(session: IHTTPSession): Response {
+        val dirParam = session.parms["dir"]
+        val dir = dirParam?.split("/")?.filter { it.isNotBlank() } ?: emptyList()
+
+        val filesToZip = repository.files.filter {
+            it.available && it.folderPath.size >= dir.size && it.folderPath.subList(0, dir.size) == dir
+        }
+        if (filesToZip.isEmpty()) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Dossier vide ou introuvable")
+        }
+
+        val pipedOut = PipedOutputStream()
+        val pipedIn = PipedInputStream(pipedOut, 128 * 1024)
+
+        Thread {
+            try {
+                ZipOutputStream(pipedOut).use { zos ->
+                    for (f in filesToZip) {
+                        val relativeParts = f.folderPath.drop(dir.size) + f.displayName
+                        val entryName = relativeParts.joinToString("/")
+                        try {
+                            zos.putNextEntry(ZipEntry(entryName))
+                            context.contentResolver.openInputStream(Uri.parse(f.uri))?.use { it.copyTo(zos) }
+                            zos.closeEntry()
+                        } catch (_: Exception) {
+                            // Skip a file that failed mid-zip (e.g. permission revoked)
+                            // rather than aborting the whole archive for the others.
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                // Reader side (NanoHTTPD) will simply see the pipe end/error out.
+            }
+        }.start()
+
+        val zipName = (dir.lastOrNull() ?: boxName) + ".zip"
+        val response = newChunkedResponse(Response.Status.OK, "application/zip", pipedIn)
+        response.addHeader("Content-Disposition", contentDispositionFor(zipName))
+        return response
+    }
+
+    /**
+     * Receives a file uploaded by a client (V2: bidirectional transfer). Saved
+     * straight into the public Downloads area (see [UploadStorage]) and
+     * recorded in [receivedRepository] — visible to the host in the app's
+     * "Fichiers reçus" list, NOT auto-published to other clients (the host
+     * stays in control of what gets re-shared, per the request).
+     */
+    private fun serveUpload(session: IHTTPSession): Response {
+        val files = HashMap<String, String>()
+        return try {
+            session.parseBody(files)
+
+            val tempPath = files["file"]
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Aucun fichier reçu")
+            val originalName = session.parms["file"]?.takeIf { it.isNotBlank() } ?: "fichier_recu"
+            val tempFile = File(tempPath)
+
+            val saved = UploadStorage.saveIncomingFile(context, tempFile, originalName)
+                ?: return newFixedLengthResponse(
+                    Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Échec de l'enregistrement"
+                )
+            val (savedUri, mimeType) = saved
+
+            receivedRepository.add(
+                ReceivedFile(
+                    id = java.util.UUID.randomUUID().toString(),
+                    uri = savedUri.toString(),
+                    displayName = originalName,
+                    size = tempFile.length(),
+                    mimeType = mimeType,
+                    receivedAt = System.currentTimeMillis(),
+                    fromIp = session.remoteIpAddress ?: "inconnu"
+                )
+            )
+
+            val response = newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", "OK")
+            addNoCacheHeaders(response)
+            response
+        } catch (e: Exception) {
+            newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Erreur d'envoi: ${e.message}")
+        }
     }
 
     /**

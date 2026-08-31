@@ -1,10 +1,10 @@
 package com.jiee.box.ui.theme
 
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 
-private val JieeLightColors = lightColorScheme(
+private val JieeColors = darkColorScheme(
     primary = JieeBlue,
     background = JieeBackground,
     surface = JieeSurface,
@@ -18,7 +18,7 @@ private val JieeLightColors = lightColorScheme(
 @Composable
 fun JieeBoxTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = JieeLightColors,
+        colorScheme = JieeColors,
         typography = MaterialTheme.typography,
         content = content
     )

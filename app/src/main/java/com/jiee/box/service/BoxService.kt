@@ -76,6 +76,7 @@ class BoxService : Service() {
         if (server != null) return
 
         val repository = (application as JieeBoxApplication).fileRepository
+        val receivedRepository = (application as JieeBoxApplication).receivedFileRepository
         val settings = (application as JieeBoxApplication).settingsRepository.get()
         repository.refreshAvailability()
 
@@ -90,7 +91,9 @@ class BoxService : Service() {
         }
 
         try {
-            val newServer = JieeHttpServer(PORT, applicationContext, repository, settings.boxName, settings.password)
+            val newServer = JieeHttpServer(
+                PORT, applicationContext, repository, receivedRepository, settings.boxName, settings.password
+            )
             newServer.start(NanoHTTPDTimeout, true)
             server = newServer
 
