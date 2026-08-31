@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jiee.box.data.BoxSettings
 import com.jiee.box.data.PublishedFile
 import com.jiee.box.data.toHumanSize
 import com.jiee.box.service.BoxServerState
@@ -26,14 +27,18 @@ import com.jiee.box.ui.theme.*
 fun HomeScreen(
     files: List<PublishedFile>,
     serverState: BoxServerState,
+    settings: BoxSettings,
     totalSize: Long,
     onAddFiles: () -> Unit,
     onAddFolder: () -> Unit,
     onRemoveFile: (String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
-    onCopyAddress: () -> Unit
+    onCopyAddress: () -> Unit,
+    onSaveSettings: (BoxSettings) -> Unit
 ) {
+    var showSettings by remember { mutableStateOf(false) }
+
     Scaffold(containerColor = JieeBackground) { padding ->
         Column(
             modifier = Modifier
@@ -41,12 +46,23 @@ fun HomeScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            Text("JIEE BOX", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = JieeTextPrimary)
-            Text(
-                "Serveur de fichiers local portable",
-                fontSize = 13.sp, color = JieeTextSecondary,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column {
+                    Text(settings.boxName, fontSize = 26.sp, fontWeight = FontWeight.Bold, color = JieeTextPrimary)
+                    Text(
+                        "Serveur de fichiers local portable",
+                        fontSize = 13.sp, color = JieeTextSecondary,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                }
+                IconButton(onClick = { showSettings = true }) {
+                    Text("⚙️", fontSize = 20.sp)
+                }
+            }
 
             StatusCard(serverState, onCopyAddress)
 
@@ -123,6 +139,69 @@ fun HomeScreen(
             }
         }
     }
+
+    if (showSettings) {
+        SettingsDialog(
+            current = settings,
+            serverRunning = serverState.isRunning,
+            onDismiss = { showSettings = false },
+            onSave = {
+                onSaveSettings(it)
+                showSettings = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsDialog(
+    current: BoxSettings,
+    serverRunning: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (BoxSettings) -> Unit
+) {
+    var name by remember { mutableStateOf(current.boxName) }
+    var password by remember { mutableStateOf(current.password ?: "") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Réglages") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Nom de la Box") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Mot de passe (optionnel)") },
+                    placeholder = { Text("Laisser vide = accès libre") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (serverRunning) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "La Box est active : redémarre-la (Arrêter puis Démarrer) pour appliquer ces changements.",
+                        fontSize = 11.sp, color = JieeTextSecondary
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                onSave(BoxSettings(boxName = name.trim().ifBlank { "JIEE BOX" }, password = password.trim().ifBlank { null }))
+            }) { Text("Enregistrer") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Annuler") }
+        }
+    )
 }
 
 @Composable
@@ -220,8 +299,9 @@ private fun FileRow(file: PublishedFile, onRemove: () -> Unit) {
                 file.displayName, color = JieeTextPrimary, fontSize = 14.sp,
                 maxLines = 1
             )
+            val folderLabel = if (file.folderPath.isNotEmpty()) "📁 ${file.folderPath.joinToString(" / ")} · " else ""
             Text(
-                file.size.toHumanSize() + if (!file.available) " · indisponible" else "",
+                folderLabel + file.size.toHumanSize() + if (!file.available) " · indisponible" else "",
                 color = if (file.available) JieeTextSecondary else JieeRed,
                 fontSize = 11.sp
             )

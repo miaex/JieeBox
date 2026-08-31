@@ -23,7 +23,8 @@ class JieeHttpServer(
     port: Int,
     private val context: Context,
     private val repository: FileRepository,
-    private val boxName: String = "JIEE BOX"
+    private val boxName: String = "JIEE BOX",
+    private val password: String? = null
 ) : NanoHTTPD(port) {
 
     // IP -> last seen timestamp (ms). Used to approximate "N devices connected"
@@ -43,9 +44,20 @@ class JieeHttpServer(
     override fun serve(session: IHTTPSession): Response {
         session.remoteIpAddress?.let { recentClients[it] = System.currentTimeMillis() }
 
+        if (!password.isNullOrBlank() && !isAuthorized(session)) {
+            val response = newFixedLengthResponse(
+                Response.Status.UNAUTHORIZED, MIME_PLAINTEXT,
+                "Mot de passe requis."
+            )
+            // Prompts the browser's own native login popup — no custom login
+            // page needed, works the same in Chrome, Safari, Firefox, etc.
+            response.addHeader("WWW-Authenticate", "Basic realm=\"${escapeHeader(boxName)}\"")
+            return response
+        }
+
         return try {
             when {
-                session.uri == "/" || session.uri.isEmpty() -> serveIndex()
+                session.uri == "/" || session.uri.isEmpty() -> serveIndex(session)
                 session.uri == "/download" -> serveDownload(session)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
             }
@@ -57,8 +69,28 @@ class JieeHttpServer(
         }
     }
 
-    private fun serveIndex(): Response {
-        val html = WebUi.render(boxName, repository.files)
+    /**
+     * Standard HTTP Basic Auth check. The username is ignored on purpose —
+     * V1 only needs a single shared access password, not per-user accounts.
+     */
+    private fun isAuthorized(session: IHTTPSession): Boolean {
+        val header = session.headers["authorization"] ?: return false
+        if (!header.startsWith("Basic ", ignoreCase = true)) return false
+        return try {
+            val decoded = String(android.util.Base64.decode(header.removePrefix("Basic ").trim(), android.util.Base64.DEFAULT))
+            val suppliedPassword = decoded.substringAfter(":", missingDelimiterValue = "")
+            suppliedPassword == password
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun escapeHeader(value: String): String = value.replace("\"", "'")
+
+    private fun serveIndex(session: IHTTPSession): Response {
+        val dirParam = session.parms["dir"]
+        val currentDir = dirParam?.split("/")?.filter { it.isNotBlank() } ?: emptyList()
+        val html = WebUi.render(boxName, repository.files, currentDir)
         val response = newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
         addNoCacheHeaders(response)
         return response

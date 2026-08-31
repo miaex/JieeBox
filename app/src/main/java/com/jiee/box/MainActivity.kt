@@ -53,17 +53,20 @@ class MainActivity : ComponentActivity() {
             JieeBoxTheme {
                 val files by viewModel.files.collectAsState()
                 val serverState by viewModel.serverState.collectAsState()
+                val settings by viewModel.settings.collectAsState()
 
                 HomeScreen(
                     files = files,
                     serverState = serverState,
+                    settings = settings,
                     totalSize = viewModel.totalSize,
                     onAddFiles = { pickFiles.launch(arrayOf("*/*")) },
                     onAddFolder = { pickFolder.launch(null) },
                     onRemoveFile = viewModel::removeFile,
                     onStart = viewModel::startBox,
                     onStop = viewModel::stopBox,
-                    onCopyAddress = { copyAddressToClipboard(serverState.address) }
+                    onCopyAddress = { copyAddressToClipboard(serverState.address) },
+                    onSaveSettings = viewModel::saveSettings
                 )
             }
         }

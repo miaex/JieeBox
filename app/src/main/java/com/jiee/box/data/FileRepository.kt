@@ -31,9 +31,48 @@ class FileRepository(private val context: Context) {
         _files.addAll(loadFromDisk())
     }
 
-    /** Add one or more SAF-selected files (from OpenMultipleDocuments / OpenDocumentTree results). */
+    /** Add one or more SAF-selected files (from OpenMultipleDocuments), shown at
+     *  the root of the web client — they weren't part of any picked folder. */
     fun addFiles(uris: List<Uri>) {
-        for (uri in uris) {
+        publish(uris.map { it to emptyList() })
+    }
+
+    /** Add every file inside a picked SAF tree (folder), recursively, preserving
+     *  the folder structure so the web client can browse it the same way
+     *  (spec-driven addition: "je veux pouvoir mettre les fichiers dans des
+     *  dossiers au niveau de l'affichage"). */
+    fun addFolder(treeUri: Uri) {
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        } catch (_: SecurityException) {
+        }
+        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return
+        val rootName = root.name ?: "Dossier"
+        val collected = mutableListOf<Pair<Uri, List<String>>>()
+        collectFilesRecursively(root, listOf(rootName), collected)
+        publish(collected)
+    }
+
+    private fun collectFilesRecursively(
+        dir: DocumentFile,
+        path: List<String>,
+        out: MutableList<Pair<Uri, List<String>>>
+    ) {
+        for (child in dir.listFiles()) {
+            if (child.isDirectory) {
+                collectFilesRecursively(child, path + (child.name ?: "dossier"), out)
+            } else if (child.isFile) {
+                out.add(child.uri to path)
+            }
+        }
+    }
+
+    /** Shared publish logic: persists permission, reads metadata, avoids duplicates. */
+    private fun publish(entries: List<Pair<Uri, List<String>>>) {
+        for ((uri, folderPath) in entries) {
             try {
                 // Persist read access across reboots / app restarts (section 14 of the spec).
                 context.contentResolver.takePersistableUriPermission(
@@ -52,35 +91,10 @@ class FileRepository(private val context: Context) {
             val id = PublishedFile.idFor(uri.toString())
 
             if (_files.none { it.id == id }) {
-                _files.add(PublishedFile(id, uri.toString(), name, size, mime, available = true))
+                _files.add(PublishedFile(id, uri.toString(), name, size, mime, folderPath, available = true))
             }
         }
         saveToDisk()
-    }
-
-    /** Add every file inside a picked SAF tree (folder), recursively. */
-    fun addFolder(treeUri: Uri) {
-        try {
-            context.contentResolver.takePersistableUriPermission(
-                treeUri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (_: SecurityException) {
-        }
-        val root = DocumentFile.fromTreeUri(context, treeUri) ?: return
-        val collected = mutableListOf<Uri>()
-        collectFilesRecursively(root, collected)
-        addFiles(collected)
-    }
-
-    private fun collectFilesRecursively(dir: DocumentFile, out: MutableList<Uri>) {
-        for (child in dir.listFiles()) {
-            if (child.isDirectory) {
-                collectFilesRecursively(child, out)
-            } else if (child.isFile) {
-                out.add(child.uri)
-            }
-        }
     }
 
     /** Remove a file from the published list. Never touches the file on disk. */
@@ -124,6 +138,7 @@ class FileRepository(private val context: Context) {
             obj.put("name", f.displayName)
             obj.put("size", f.size)
             obj.put("mime", f.mimeType)
+            obj.put("folder", JSONArray(f.folderPath))
             array.put(obj)
         }
         prefs.edit().putString("files", array.toString()).apply()
@@ -135,12 +150,17 @@ class FileRepository(private val context: Context) {
             val array = JSONArray(raw)
             (0 until array.length()).map { i ->
                 val obj = array.getJSONObject(i)
+                val folderArray = obj.optJSONArray("folder")
+                val folderPath = if (folderArray != null) {
+                    (0 until folderArray.length()).map { folderArray.getString(it) }
+                } else emptyList()
                 PublishedFile(
                     id = obj.getString("id"),
                     uri = obj.getString("uri"),
                     displayName = obj.getString("name"),
                     size = obj.getLong("size"),
                     mimeType = obj.optString("mime", "application/octet-stream"),
+                    folderPath = folderPath,
                     available = true // re-validated by refreshAvailability() at startup
                 )
             }

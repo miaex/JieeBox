@@ -76,6 +76,7 @@ class BoxService : Service() {
         if (server != null) return
 
         val repository = (application as JieeBoxApplication).fileRepository
+        val settings = (application as JieeBoxApplication).settingsRepository.get()
         repository.refreshAvailability()
 
         val ip = NetworkUtils.findLocalIPv4()
@@ -89,14 +90,14 @@ class BoxService : Service() {
         }
 
         try {
-            val newServer = JieeHttpServer(PORT, applicationContext, repository)
+            val newServer = JieeHttpServer(PORT, applicationContext, repository, settings.boxName, settings.password)
             newServer.start(NanoHTTPDTimeout, true)
             server = newServer
 
             val address = "http://$ip:$PORT"
             _state.value = BoxServerState(isRunning = true, address = address, connectedDevices = 0)
 
-            startForeground(NOTIFICATION_ID, buildNotification(address))
+            startForeground(NOTIFICATION_ID, buildNotification(address, settings.boxName))
             startPresencePolling()
         } catch (e: Exception) {
             _state.value = BoxServerState(isRunning = false, error = "Impossible de démarrer le serveur: ${e.message}")
@@ -127,7 +128,7 @@ class BoxService : Service() {
         handler.postDelayed(runnable, 5_000)
     }
 
-    private fun buildNotification(address: String): Notification {
+    private fun buildNotification(address: String, boxName: String): Notification {
         createChannelIfNeeded()
 
         val openIntent = PendingIntent.getActivity(
@@ -140,7 +141,7 @@ class BoxService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("JIEE BOX active")
+            .setContentTitle("$boxName active")
             .setContentText(address)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setOngoing(true)
@@ -151,9 +152,10 @@ class BoxService : Service() {
 
     private fun updateNotification() {
         val addr = _state.value.address ?: return
+        val boxName = (application as JieeBoxApplication).settingsRepository.get().boxName
         val manager = getSystemService(NotificationManager::class.java)
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("JIEE BOX active — ${_state.value.connectedDevices} appareil(s)")
+            .setContentTitle("$boxName — ${_state.value.connectedDevices} appareil(s)")
             .setContentText(addr)
             .setSmallIcon(android.R.drawable.stat_sys_upload)
             .setOngoing(true)

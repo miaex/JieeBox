@@ -3,13 +3,30 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Isometric box (the "BOX" in JIEE BOX) -->
     <path
         android:fillColor="#4F7CFF"
-        android:pathData="M24,34 L54,20 L84,34 L84,74 L54,88 L24,74 Z" />
+        android:pathData="M24,38 L54,24 L84,38 L84,72 L54,86 L24,72 Z" />
     <path
-        android:fillColor="#3A5FE0"
-        android:pathData="M24,34 L54,48 L54,88 L24,74 Z" />
+        android:fillColor="#3457D6"
+        android:pathData="M24,38 L54,52 L54,86 L24,72 Z" />
     <path
         android:fillColor="#6E93FF"
-        android:pathData="M84,34 L54,48 L54,88 L84,74 Z" />
+        android:pathData="M84,38 L54,52 L54,86 L84,72 Z" />
+    <!-- Small Wi-Fi arcs above the box, hinting at the local wireless server -->
+    <path
+        android:strokeColor="#8FB0FF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:pathData="M43,17 A16,16 0 0 1 65,17"
+        android:fillColor="#00000000" />
+    <path
+        android:strokeColor="#8FB0FF"
+        android:strokeWidth="3.2"
+        android:strokeLineCap="round"
+        android:pathData="M48,20.5 A9,9 0 0 1 60,20.5"
+        android:fillColor="#00000000" />
+    <path
+        android:fillColor="#8FB0FF"
+        android:pathData="M54,22 m-2.4,0 a2.4,2.4 0 1,0 4.8,0 a2.4,2.4 0 1,0 -4.8,0" />
 </vector>

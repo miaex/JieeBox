@@ -15,6 +15,10 @@ data class PublishedFile(
     val displayName: String,
     val size: Long,
     val mimeType: String,
+    /** Path segments of the folder this file lives in, e.g. ["PSP", "Saves"]
+     *  for a file published as part of a folder. Empty = shown at the root
+     *  of the web client (individually-picked files, spec section 5). */
+    val folderPath: List<String> = emptyList(),
     /** Set to false by [com.jiee.box.data.FileRepository.refreshAvailability] if the
      *  file or its permission has disappeared since it was published. */
     val available: Boolean = true
