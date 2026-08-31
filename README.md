@@ -119,10 +119,9 @@ directement depuis le stockage d'origine vers le réseau, en streaming.
   fournisseur de stockage. `FileRepository.refreshAvailability()` détecte ce
   cas au démarrage et marque le fichier "indisponible" plutôt que de planter
   (conforme à la section 14).
-- **QR code (section 16) :** non implémenté en V1 pour rester minimal, comme
-  autorisé par le cahier des charges ("V1 ou V1.1"). Le bouton "Copier
-  l'adresse" couvre le besoin immédiat ; un QR code (ex. via ZXing) est un
-  ajout simple pour V1.1.
+- **QR code (section 16) :** implémenté — bouton "Afficher le QR code" sous
+  l'adresse une fois la Box active. Résout le problème pratique d'une adresse
+  IP difficile à taper à la main.
 - **Reprise de téléchargement / téléchargements multiples en un clic
   (sections 10-11, V1.1) :** le serveur gère déjà les requêtes `Range` par
   fichier (donc pause/reprise fonctionne déjà dans Chrome pour un fichier

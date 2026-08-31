@@ -1,5 +1,7 @@
 package com.jiee.box.ui
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -11,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -124,6 +127,9 @@ fun HomeScreen(
 
 @Composable
 private fun StatusCard(state: BoxServerState, onCopyAddress: () -> Unit) {
+    var showQr by remember { mutableStateOf(false) }
+    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -158,9 +164,43 @@ private fun StatusCard(state: BoxServerState, onCopyAddress: () -> Unit) {
                 Text(state.address, color = JieeBlue, fontSize = 14.sp, modifier = Modifier.weight(1f))
                 Text("Copier", color = JieeTextSecondary, fontSize = 12.sp)
             }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = {
+                    qrBitmap = QrCodeGenerator.generate(state.address)
+                    showQr = true
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("📷 Afficher le QR code")
+            }
             Spacer(Modifier.height(6.dp))
             Text("${state.connectedDevices} appareil(s) connecté(s)", color = JieeTextSecondary, fontSize = 12.sp)
         }
+    }
+
+    if (showQr && qrBitmap != null) {
+        AlertDialog(
+            onDismissRequest = { showQr = false },
+            confirmButton = {
+                TextButton(onClick = { showQr = false }) { Text("Fermer") }
+            },
+            title = { Text("Scannez pour rejoindre la BOX") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Image(
+                        bitmap = qrBitmap!!.asImageBitmap(),
+                        contentDescription = "QR code d'accès à JIEE BOX",
+                        modifier = Modifier.size(240.dp)
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "L'appareil qui scanne doit d'abord être connecté au même hotspot Wi-Fi.",
+                        fontSize = 11.sp, color = JieeTextSecondary
+                    )
+                }
+            }
+        )
     }
 }
 

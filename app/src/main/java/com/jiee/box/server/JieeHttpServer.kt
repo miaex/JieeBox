@@ -59,7 +59,9 @@ class JieeHttpServer(
 
     private fun serveIndex(): Response {
         val html = WebUi.render(boxName, repository.files)
-        return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
+        val response = newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
+        addNoCacheHeaders(response)
+        return response
     }
 
     /**
@@ -102,7 +104,7 @@ class JieeHttpServer(
             val stream: InputStream = ParcelFileDescriptor.AutoCloseInputStream(pfd)
             val response = newFixedLengthResponse(Response.Status.OK, file.mimeType, stream, totalLength)
             response.addHeader("Accept-Ranges", "bytes")
-            response.addHeader("Content-Disposition", "attachment; filename=\"${file.displayName}\"")
+            response.addHeader("Content-Disposition", contentDispositionFor(file.displayName))
             return response
         }
 
@@ -124,8 +126,27 @@ class JieeHttpServer(
         )
         response.addHeader("Accept-Ranges", "bytes")
         response.addHeader("Content-Range", "bytes $start-$end/$totalLength")
-        response.addHeader("Content-Disposition", "attachment; filename=\"${file.displayName}\"")
+        response.addHeader("Content-Disposition", contentDispositionFor(file.displayName))
         return response
+    }
+
+    /**
+     * Builds an RFC 6266-safe Content-Disposition header. Many of the user's real
+     * filenames contain accented characters (é, è, ', …). A raw, un-encoded
+     * filename in this header is technically invalid HTTP (headers are meant to be
+     * ASCII/Latin-1) and some HTTP stacks/browsers silently abort the download
+     * instead of erroring visibly — exactly the "nothing happens on tap" symptom.
+     * We send both a plain ASCII fallback (filename=) and the correctly
+     * percent-encoded UTF-8 version (filename*=), per RFC 6266 — this is the
+     * standard, broadly-supported way to serve non-ASCII filenames over HTTP.
+     */
+    private fun contentDispositionFor(displayName: String): String {
+        val asciiFallback = displayName
+            .map { if (it.code in 32..126 && it != '"' && it != '\\') it else '_' }
+            .joinToString("")
+            .ifBlank { "fichier" }
+        val encoded = java.net.URLEncoder.encode(displayName, "UTF-8").replace("+", "%20")
+        return "attachment; filename=\"$asciiFallback\"; filename*=UTF-8''$encoded"
     }
 
     private fun parseRange(header: String, totalLength: Long): Pair<Long, Long>? {
@@ -137,5 +158,18 @@ class JieeHttpServer(
         val end = parts.getOrNull(1)?.takeIf { it.isNotBlank() }?.toLongOrNull() ?: (totalLength - 1)
         if (start < 0 || end >= totalLength || start > end) return null
         return start to end
+    }
+
+    /**
+     * A browser on a network that just failed (no internet, dropped Wi-Fi, wrong
+     * SIM routing, etc.) can cache that failed response and keep serving it from
+     * cache even after the real box comes back — which looks like "only works in
+     * incognito" to the user. Telling the browser never to cache these responses
+     * avoids that class of confusing, hard-to-diagnose stale-failure behaviour.
+     */
+    private fun addNoCacheHeaders(response: Response) {
+        response.addHeader("Cache-Control", "no-cache, no-store, must-revalidate")
+        response.addHeader("Pragma", "no-cache")
+        response.addHeader("Expires", "0")
     }
 }

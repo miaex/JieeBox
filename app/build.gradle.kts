@@ -56,5 +56,8 @@ dependencies {
     // Lightweight embeddable HTTP server used to turn the phone into a local file server.
     implementation("org.nanohttpd:nanohttpd:2.3.1")
 
+    // QR code generation for the "clean link" problem: scanning beats typing an IP.
+    implementation("com.google.zxing:core:3.5.3")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
