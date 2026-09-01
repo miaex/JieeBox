@@ -93,12 +93,14 @@ object WebUi {
               min-height: 100vh;
             }
             header {
-              padding: 24px 20px 16px; text-align: center;
+              padding: 28px 20px 18px; text-align: center;
               background: linear-gradient(180deg, #2E2620, #241C17);
               border-bottom: 1px solid #3D332B;
             }
-            header h1 { margin: 0; font-size: 22px; letter-spacing: 0.5px; color: #F3E9DD; }
-            header p { margin: 4px 0 0; color: #B7A48F; font-size: 13px; }
+            .logo { width: 56px; height: 56px; border-radius: 16px; display: block; margin: 0 auto 10px; box-shadow: 0 4px 14px rgba(240, 130, 78, 0.25); }
+            header h1 { margin: 0; font-size: 21px; letter-spacing: 0.5px; color: #F3E9DD; }
+            header p.tagline { margin: 3px 0 0; color: #8A796C; font-size: 12px; font-style: italic; }
+            header p.stats { margin: 8px 0 0; color: #B7A48F; font-size: 13px; }
             .toolbar {
               max-width: 640px; margin: 14px auto 0; padding: 0 16px;
               display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
@@ -140,7 +142,11 @@ object WebUi {
             }
             .dl-btn:active { opacity: 0.8; }
             .empty { text-align: center; color: #B7A48F; margin-top: 40px; }
-            footer { text-align: center; color: #6E5E4F; font-size: 11px; padding: 24px; }
+            footer { text-align: center; padding: 28px 20px 24px; border-top: 1px solid #3D332B; margin-top: 8px; }
+            .brand-name { font-size: 13px; letter-spacing: 1.5px; color: #B7A48F; font-weight: 700; }
+            .brand-tagline { font-size: 11px; color: #6E5E4F; margin-top: 6px; }
+            .brand-tagline strong { color: #8A796C; font-weight: 600; }
+            .brand-sub { font-size: 10.5px; color: #55483C; margin-top: 4px; font-style: italic; }
 
             .upload-section {
               max-width: 640px; margin: 8px auto 0; padding: 0 16px 4px;
@@ -163,8 +169,10 @@ object WebUi {
         </head>
         <body>
           <header>
-            <h1>📦 ${escape(boxName)}</h1>
-            <p>$itemCount élément(s) — connexion locale, sans internet</p>
+            <img class="logo" src="/logo.png" alt="${escape(boxName)}">
+            <h1>${escape(boxName)}</h1>
+            <p class="tagline">Votre espace de partage local, privé et sans internet</p>
+            <p class="stats">$itemCount élément(s) disponible(s)</p>
           </header>
 
           <div class="toolbar">
@@ -186,7 +194,11 @@ object WebUi {
             <div id="uploadList"></div>
           </div>
 
-          <footer>JIEE BOX — your personal offline file hub</footer>
+          <footer>
+            <div class="brand-name">JIEE BOX</div>
+            <div class="brand-tagline">Une solution conçue par <strong>Jérémie K. ETSO</strong></div>
+            <div class="brand-sub">Penser le partage de fichiers autrement — local, instantané, sans dépendre d'internet.</div>
+          </footer>
 
           <script>
             function filterRows() {

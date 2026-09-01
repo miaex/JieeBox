@@ -6,8 +6,11 @@ import android.os.ParcelFileDescriptor
 import com.jiee.box.data.FileRepository
 import com.jiee.box.data.ReceivedFile
 import com.jiee.box.data.ReceivedFileRepository
+import com.jiee.box.data.UploadProgressTracker
 import com.jiee.box.data.UploadStorage
 import fi.iki.elonen.NanoHTTPD
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
 import java.io.PipedInputStream
@@ -27,6 +30,7 @@ import java.util.zip.ZipOutputStream
  *   GET  /                  -> HTML listing of the current folder (WebUi)
  *   GET  /download?id=xxx   -> streams one published file, with HTTP Range support
  *   GET  /zip?dir=A/B       -> streams a .zip of everything in that folder (V1.1)
+ *   GET  /logo.png          -> the app icon artwork, for branding the client page
  *   POST /upload            -> client -> box upload (V2 bidirectional transfer)
  */
 class JieeHttpServer(
@@ -71,6 +75,7 @@ class JieeHttpServer(
                 session.uri == "/" || session.uri.isEmpty() -> serveIndex(session)
                 session.uri == "/download" -> serveDownload(session)
                 session.uri == "/zip" -> serveZip(session)
+                session.uri == "/logo.png" -> serveLogo()
                 session.uri == "/upload" && session.method == Method.POST -> serveUpload(session)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
             }
@@ -224,6 +229,31 @@ class JieeHttpServer(
     }
 
     /**
+     * Serves the app's own icon artwork so the client page can show real
+     * branding instead of a generic emoji — decoded from the app resource
+     * each time rather than cached on disk, since it's a small image
+     * requested rarely (browsers cache it via the header below anyway).
+     */
+    private fun serveLogo(): Response {
+        return try {
+            val resId = context.resources.getIdentifier("ic_launcher_foreground", "drawable", context.packageName)
+            val bitmap = android.graphics.BitmapFactory.decodeResource(context.resources, resId)
+                ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "logo introuvable")
+            val bytes = ByteArrayOutputStream().use { out ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                out.toByteArray()
+            }
+            val response = newFixedLengthResponse(
+                Response.Status.OK, "image/png", ByteArrayInputStream(bytes), bytes.size.toLong()
+            )
+            response.addHeader("Cache-Control", "public, max-age=86400")
+            response
+        } catch (e: Exception) {
+            newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "logo introuvable")
+        }
+    }
+
+    /**
      * Receives a file uploaded by a client (V2: bidirectional transfer). Saved
      * straight into the public Downloads area (see [UploadStorage]) and
      * recorded in [receivedRepository] — visible to the host in the app's
@@ -232,6 +262,12 @@ class JieeHttpServer(
      */
     private fun serveUpload(session: IHTTPSession): Response {
         val files = HashMap<String, String>()
+        val fromIp = session.remoteIpAddress ?: "inconnu"
+        val totalExpected = session.headers["content-length"]?.toLongOrNull()
+        val progressWatcher = if (totalExpected != null && totalExpected > 0) {
+            startProgressWatcher(totalExpected, fromIp)
+        } else null
+
         return try {
             session.parseBody(files)
 
@@ -254,7 +290,7 @@ class JieeHttpServer(
                     size = tempFile.length(),
                     mimeType = mimeType,
                     receivedAt = System.currentTimeMillis(),
-                    fromIp = session.remoteIpAddress ?: "inconnu"
+                    fromIp = fromIp
                 )
             )
 
@@ -263,7 +299,46 @@ class JieeHttpServer(
             response
         } catch (e: Exception) {
             newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Erreur d'envoi: ${e.message}")
+        } finally {
+            progressWatcher?.interrupt()
+            UploadProgressTracker.clear()
         }
+    }
+
+    /**
+     * NanoHTTPD parses multipart bodies synchronously with no progress
+     * callback, but it does write the incoming file to a real temp file in
+     * our own cache dir (see the java.io.tmpdir fix in JieeBoxApplication) as
+     * it reads. Polling that file's growing size against the request's
+     * Content-Length gives a reasonably accurate live percentage to show on
+     * the host's own screen without touching NanoHTTPD internals.
+     */
+    private fun startProgressWatcher(totalExpected: Long, fromIp: String): Thread {
+        val cacheDir = context.cacheDir
+        val before = cacheDir.listFiles()?.map { it.name }?.toSet() ?: emptySet()
+        val thread = Thread {
+            try {
+                var trackedFile: File? = null
+                while (!Thread.currentThread().isInterrupted) {
+                    if (trackedFile == null) {
+                        trackedFile = cacheDir.listFiles()
+                            ?.filter { it.name !in before }
+                            ?.maxByOrNull { it.lastModified() }
+                    }
+                    val written = trackedFile?.length() ?: 0L
+                    val percent = ((written * 100) / totalExpected).toInt()
+                    UploadProgressTracker.update(percent, fromIp)
+                    Thread.sleep(250)
+                }
+            } catch (_: InterruptedException) {
+                // Normal: interrupted once the upload finishes (see `finally` above).
+            } catch (_: Exception) {
+                // Best-effort progress only — never let this affect the actual upload.
+            }
+        }
+        thread.isDaemon = true
+        thread.start()
+        return thread
     }
 
     /**

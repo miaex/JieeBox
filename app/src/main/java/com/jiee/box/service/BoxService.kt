@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.jiee.box.MainActivity
 import com.jiee.box.JieeBoxApplication
@@ -57,6 +58,7 @@ class BoxService : Service() {
     private var server: JieeHttpServer? = null
     private var pollHandle: Runnable? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -97,6 +99,17 @@ class BoxService : Service() {
             newServer.start(NanoHTTPDTimeout, true)
             server = newServer
 
+            // Many Android OEMs (Samsung, Xiaomi, etc.) throttle CPU/network for
+            // apps once the screen is off, even with a foreground service — this
+            // is what stalls or drops an in-progress upload the moment the host
+            // stops actively looking at the app. A partial wake lock keeps the
+            // CPU awake for as long as the box is running so transfers can
+            // actually finish in the background.
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK, "JieeBox::ServerWakeLock"
+            ).apply { acquire(12 * 60 * 60 * 1000L /* 12h safety cap */) }
+
             val address = "http://$ip:$PORT"
             _state.value = BoxServerState(isRunning = true, address = address, connectedDevices = 0)
 
@@ -112,6 +125,8 @@ class BoxService : Service() {
         pollHandle?.let { handler.removeCallbacks(it) }
         server?.stop()
         server = null
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
         _state.value = BoxServerState(isRunning = false)
     }
 
@@ -184,5 +199,9 @@ class BoxService : Service() {
     }
 }
 
-// NanoHTTPD's start() takes a socket-read timeout in ms, not related to session length.
-private const val NanoHTTPDTimeout = 60_000
+// NanoHTTPD's start() takes a socket-read timeout in ms. Bumped well above the
+// default 60s: under CPU throttling (screen off, Doze) a slow-but-alive
+// connection can go quiet for longer than that between reads, and a timeout
+// this short was closing the socket mid-upload — exactly the "network error"
+// the user hit. The wake lock above is the primary fix; this is a safety margin.
+private const val NanoHTTPDTimeout = 10 * 60 * 1000 // 10 minutes

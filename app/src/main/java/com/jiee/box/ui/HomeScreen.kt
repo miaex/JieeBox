@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.item
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import com.jiee.box.data.BoxSettings
 import com.jiee.box.data.PublishedFile
 import com.jiee.box.data.ReceivedFile
+import com.jiee.box.data.UploadProgress
 import com.jiee.box.data.toHumanSize
 import com.jiee.box.service.BoxServerState
 import com.jiee.box.ui.theme.*
@@ -34,6 +36,7 @@ fun HomeScreen(
     settings: BoxSettings,
     totalSize: Long,
     isImporting: Boolean,
+    uploadProgress: UploadProgress?,
     onAddFiles: () -> Unit,
     onAddFolder: () -> Unit,
     onRemoveFile: (String) -> Unit,
@@ -74,6 +77,11 @@ fun HomeScreen(
             }
 
             StatusCard(serverState, onCopyAddress)
+
+            if (uploadProgress != null) {
+                Spacer(Modifier.height(10.dp))
+                UploadProgressBanner(uploadProgress)
+            }
 
             Spacer(Modifier.height(16.dp))
 
@@ -153,6 +161,14 @@ fun HomeScreen(
             serverState.error?.let {
                 Text(it, color = JieeTerracottaDeep, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
             }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "JIEE BOX · conçu par Jérémie K. ETSO",
+                fontSize = 10.sp, color = JieeTextSecondary,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
         }
     }
 
@@ -170,6 +186,35 @@ fun HomeScreen(
 }
 
 @Composable
+private fun UploadProgressBanner(progress: UploadProgress) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(JieeSurface, RoundedCornerShape(12.dp))
+            .padding(12.dp)
+    ) {
+        Text(
+            "📥 Réception depuis ${progress.fromIp}... ${progress.percent}%",
+            color = JieeTerracotta, fontSize = 12.sp, fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(6.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .background(JieeOutline, RoundedCornerShape(4.dp))
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .fillMaxWidth(fraction = (progress.percent / 100f).coerceIn(0f, 1f))
+                    .background(JieeTerracotta, RoundedCornerShape(4.dp))
+            )
+        }
+    }
+}
+
+@Composable
 private fun PublishedTab(
     files: List<PublishedFile>,
     totalSize: Long,
@@ -179,13 +224,20 @@ private fun PublishedTab(
 ) {
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    var expandedFolders by remember { mutableStateOf(setOf<String>()) }
+    var folderPendingDelete by remember { mutableStateOf<String?>(null) }
 
-    // Keep the selection in sync if the underlying list changes (e.g. a file
-    // disappears after refreshAvailability, or the bulk-delete just ran).
     LaunchedEffect(files) {
         val validIds = files.map { it.id }.toSet()
         val filtered = selectedIds.filter { it in validIds }.toSet()
         if (filtered != selectedIds) selectedIds = filtered
+    }
+
+    val rootFiles = remember(files) { files.filter { it.folderPath.isEmpty() }.sortedBy { it.displayName.lowercase() } }
+    val folderGroups = remember(files) {
+        files.filter { it.folderPath.isNotEmpty() }
+            .groupBy { it.folderPath.first() }
+            .toSortedMap(compareBy { it.lowercase() })
     }
 
     Column(modifier = modifier) {
@@ -243,7 +295,7 @@ private fun PublishedTab(
             }
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(files, key = { it.id }) { file ->
+                items(rootFiles, key = { it.id }) { file ->
                     FileRow(
                         file = file,
                         selectionMode = selectionMode,
@@ -254,8 +306,110 @@ private fun PublishedTab(
                         onRemove = { onRemoveFile(file.id) }
                     )
                 }
+
+                folderGroups.forEach { (folderName, filesInFolder) ->
+                    item(key = "folder_$folderName") {
+                        FolderGroupRow(
+                            name = folderName,
+                            files = filesInFolder,
+                            expanded = folderName in expandedFolders,
+                            selectionMode = selectionMode,
+                            allSelected = filesInFolder.isNotEmpty() && filesInFolder.all { it.id in selectedIds },
+                            onToggleExpand = {
+                                expandedFolders = if (folderName in expandedFolders) expandedFolders - folderName
+                                else expandedFolders + folderName
+                            },
+                            onToggleSelectAll = {
+                                val ids = filesInFolder.map { it.id }.toSet()
+                                selectedIds = if (ids.all { it in selectedIds }) selectedIds - ids else selectedIds + ids
+                            },
+                            onDeleteFolder = { folderPendingDelete = folderName }
+                        )
+                    }
+                    if (folderName in expandedFolders) {
+                        items(filesInFolder, key = { it.id }) { file ->
+                            FileRow(
+                                file = file,
+                                selectionMode = selectionMode,
+                                selected = file.id in selectedIds,
+                                onToggleSelect = {
+                                    selectedIds = if (file.id in selectedIds) selectedIds - file.id else selectedIds + file.id
+                                },
+                                onRemove = { onRemoveFile(file.id) },
+                                indented = true
+                            )
+                        }
+                    }
+                }
             }
         }
+    }
+
+    folderPendingDelete?.let { folderName ->
+        val idsToDelete = folderGroups[folderName]?.map { it.id }?.toSet() ?: emptySet()
+        AlertDialog(
+            onDismissRequest = { folderPendingDelete = null },
+            title = { Text("Supprimer le dossier") },
+            text = {
+                Text(
+                    "Retirer les ${idsToDelete.size} fichier(s) de \"$folderName\" de la liste publiée ?\n" +
+                        "Les fichiers originaux sur ton téléphone ne seront pas touchés."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRemoveFiles(idsToDelete)
+                    folderPendingDelete = null
+                }) { Text("Supprimer", color = JieeTerracottaDeep) }
+            },
+            dismissButton = {
+                TextButton(onClick = { folderPendingDelete = null }) { Text("Annuler") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun FolderGroupRow(
+    name: String,
+    files: List<PublishedFile>,
+    expanded: Boolean,
+    selectionMode: Boolean,
+    allSelected: Boolean,
+    onToggleExpand: () -> Unit,
+    onToggleSelectAll: () -> Unit,
+    onDeleteFolder: () -> Unit
+) {
+    val count = files.size
+    val size = files.sumOf { it.size }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+            .background(JieeSurface, RoundedCornerShape(10.dp))
+            .clickable { onToggleExpand() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            if (selectionMode) {
+                Checkbox(checked = allSelected, onCheckedChange = { onToggleSelectAll() })
+                Spacer(Modifier.width(2.dp))
+            }
+            Text(if (expanded) "📂" else "📁", fontSize = 16.sp)
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(name, color = JieeTextPrimary, fontSize = 14.sp, maxLines = 1)
+                Text("$count fichier(s) · ${size.toHumanSize()}", color = JieeTextSecondary, fontSize = 11.sp)
+            }
+        }
+        if (!selectionMode) {
+            TextButton(onClick = onDeleteFolder) {
+                Text("🗑", fontSize = 14.sp)
+            }
+        }
+        Text(if (expanded) "︿" else "﹀", color = JieeTextSecondary, fontSize = 14.sp)
     }
 }
 
@@ -341,6 +495,7 @@ private fun SettingsDialog(
 private fun StatusCard(state: BoxServerState, onCopyAddress: () -> Unit) {
     var showQr by remember { mutableStateOf(false) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var showAddress by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -362,29 +517,36 @@ private fun StatusCard(state: BoxServerState, onCopyAddress: () -> Unit) {
         }
 
         if (state.isRunning && state.address != null) {
-            Spacer(Modifier.height(10.dp))
-            Text("Connectez vos appareils au hotspot Wi-Fi, puis ouvrez :", color = JieeTextSecondary, fontSize = 12.sp)
-            Spacer(Modifier.height(4.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(JieeBackground, RoundedCornerShape(8.dp))
-                    .clickable { onCopyAddress() }
-                    .padding(10.dp)
-            ) {
-                Text(state.address, color = JieeBlue, fontSize = 14.sp, modifier = Modifier.weight(1f))
-                Text("Copier", color = JieeTextSecondary, fontSize = 12.sp)
-            }
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(
+            Spacer(Modifier.height(12.dp))
+            Button(
                 onClick = {
                     qrBitmap = QrCodeGenerator.generate(state.address)
                     showQr = true
                 },
-                modifier = Modifier.fillMaxWidth()
+                colors = ButtonDefaults.buttonColors(containerColor = JieeBlue),
+                modifier = Modifier.fillMaxWidth().height(46.dp)
             ) {
-                Text("📷 Afficher le QR code")
+                Text("📷 Connecter un appareil (scanner)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = { showAddress = !showAddress }, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    if (showAddress) "Masquer l'adresse technique" else "🔧 Voir l'adresse technique",
+                    fontSize = 11.sp, color = JieeTextSecondary
+                )
+            }
+            if (showAddress) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(JieeBackground, RoundedCornerShape(8.dp))
+                        .clickable { onCopyAddress() }
+                        .padding(10.dp)
+                ) {
+                    Text(state.address, color = JieeBlue, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    Text("Copier", color = JieeTextSecondary, fontSize = 12.sp)
+                }
             }
             Spacer(Modifier.height(6.dp))
             Text("${state.connectedDevices} appareil(s) connecté(s)", color = JieeTextSecondary, fontSize = 12.sp)
@@ -422,12 +584,13 @@ private fun FileRow(
     selectionMode: Boolean,
     selected: Boolean,
     onToggleSelect: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    indented: Boolean = false
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(start = if (indented) 20.dp else 0.dp, top = 4.dp, bottom = 4.dp)
             .background(JieeSurface, RoundedCornerShape(10.dp))
             .let { if (selectionMode) it.clickable { onToggleSelect() } else it }
             .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -443,7 +606,7 @@ private fun FileRow(
                 file.displayName, color = JieeTextPrimary, fontSize = 14.sp,
                 maxLines = 1
             )
-            val folderLabel = if (file.folderPath.isNotEmpty()) "📁 ${file.folderPath.joinToString(" / ")} · " else ""
+            val folderLabel = if (!indented && file.folderPath.isNotEmpty()) "📁 ${file.folderPath.joinToString(" / ")} · " else ""
             Text(
                 folderLabel + file.size.toHumanSize() + if (!file.available) " · indisponible" else "",
                 color = if (file.available) JieeTextSecondary else JieeTerracottaDeep,

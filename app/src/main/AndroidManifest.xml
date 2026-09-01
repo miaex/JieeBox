@@ -17,6 +17,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Lets us ask the user, once, to exempt JIEE BOX from aggressive battery
+         optimization — several Android manufacturers otherwise throttle the
+         app in the background badly enough to break in-progress uploads even
+         with a foreground service running. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Android 13+ requires explicit runtime permission to show the "BOX active" notification. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

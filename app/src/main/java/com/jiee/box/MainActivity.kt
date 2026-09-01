@@ -4,8 +4,12 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -49,6 +53,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        requestBatteryOptimizationExemptionOnce()
+
         setContent {
             JieeBoxTheme {
                 val files by viewModel.files.collectAsState()
@@ -56,6 +62,7 @@ class MainActivity : ComponentActivity() {
                 val serverState by viewModel.serverState.collectAsState()
                 val settings by viewModel.settings.collectAsState()
                 val isImporting by viewModel.isImporting.collectAsState()
+                val uploadProgress by viewModel.uploadProgress.collectAsState()
 
                 HomeScreen(
                     files = files,
@@ -64,6 +71,7 @@ class MainActivity : ComponentActivity() {
                     settings = settings,
                     totalSize = viewModel.totalSize,
                     isImporting = isImporting,
+                    uploadProgress = uploadProgress,
                     onAddFiles = { pickFiles.launch(arrayOf("*/*")) },
                     onAddFolder = { pickFolder.launch(null) },
                     onRemoveFile = viewModel::removeFile,
@@ -79,6 +87,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Asks once (not every launch) to be exempted from battery optimization —
+     *  the single biggest cause of uploads/downloads stalling once the app
+     *  isn't in the foreground on Samsung/Xiaomi/etc. Never re-prompts if the
+     *  user dismisses it; they can still enable it later from Android's own
+     *  battery settings. */
+    private fun requestBatteryOptimizationExemptionOnce() {
+        val prefs = getSharedPreferences("jiee_box_onboarding", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("asked_battery_optimization", false)) return
+        prefs.edit().putBoolean("asked_battery_optimization", true).apply()
+
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+            try {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (_: Exception) {
+                // Some OEM firmwares block this intent; nothing more we can do
+                // automatically, the user can still allow it manually.
+            }
+        }
+    }
+
     private fun copyAddressToClipboard(address: String?) {
         if (address == null) return
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -86,3 +118,4 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, "Adresse copiée", Toast.LENGTH_SHORT).show()
     }
 }
+

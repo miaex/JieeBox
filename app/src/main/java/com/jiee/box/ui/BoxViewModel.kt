@@ -8,6 +8,8 @@ import com.jiee.box.JieeBoxApplication
 import com.jiee.box.data.BoxSettings
 import com.jiee.box.data.PublishedFile
 import com.jiee.box.data.ReceivedFile
+import com.jiee.box.data.UploadProgress
+import com.jiee.box.data.UploadProgressTracker
 import com.jiee.box.service.BoxService
 import com.jiee.box.service.BoxServerState
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +36,8 @@ class BoxViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isImporting = MutableStateFlow(false)
     val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()
+
+    val uploadProgress: StateFlow<UploadProgress?> = UploadProgressTracker.state
 
     val serverState: StateFlow<BoxServerState> = BoxService.state
 
