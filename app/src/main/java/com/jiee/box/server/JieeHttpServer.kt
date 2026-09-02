@@ -3,12 +3,16 @@ package com.jiee.box.server
 import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
+import androidx.core.app.NotificationCompat
 import com.jiee.box.data.FileRepository
 import com.jiee.box.data.ReceivedFile
 import com.jiee.box.data.ReceivedFileRepository
+import com.jiee.box.data.TransferLogRepository
+import com.jiee.box.data.TransferType
 import com.jiee.box.data.UploadProgressTracker
 import com.jiee.box.data.UploadStorage
 import fi.iki.elonen.NanoHTTPD
+import java.io.BufferedInputStream
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -16,6 +20,8 @@ import java.io.InputStream
 import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.zip.Deflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -31,6 +37,7 @@ import java.util.zip.ZipOutputStream
  *   GET  /download?id=xxx   -> streams one published file, with HTTP Range support
  *   GET  /zip?dir=A/B       -> streams a .zip of everything in that folder (V1.1)
  *   GET  /logo.png          -> the app icon artwork, for branding the client page
+ *   GET  /thumbnail?id=xxx  -> a small downscaled preview for image files
  *   POST /upload            -> client -> box upload (V2 bidirectional transfer)
  */
 class JieeHttpServer(
@@ -38,9 +45,18 @@ class JieeHttpServer(
     private val context: Context,
     private val repository: FileRepository,
     private val receivedRepository: ReceivedFileRepository,
+    private val transferLog: TransferLogRepository,
     private val boxName: String = "JIEE BOX",
     private val password: String? = null
 ) : NanoHTTPD(port) {
+
+    companion object {
+        // Bigger reads/writes than Kotlin's 8KB default mean fewer round-trips
+        // through Android's ContentResolver (each of which can carry Binder
+        // IPC overhead) and fewer socket syscalls — a real, if modest, speed
+        // win on top of whatever the Wi-Fi link itself can do.
+        private const val COPY_BUFFER_SIZE = 256 * 1024
+    }
 
     // IP -> last seen timestamp (ms). Used to approximate "N devices connected"
     // in the UI. NanoHTTPD doesn't expose device identity beyond the socket's
@@ -48,13 +64,23 @@ class JieeHttpServer(
     // security-relevant session list.
     private val recentClients = ConcurrentHashMap<String, Long>()
     private val presenceWindowMs = 60_000L
+    private val activeTransfersCounter = AtomicInteger(0)
 
-    val connectedDeviceCount: Int
+    data class ConnectedDevice(val ip: String, val lastSeenMs: Long)
+
+    val connectedDevices: List<ConnectedDevice>
         get() {
             val cutoff = System.currentTimeMillis() - presenceWindowMs
             recentClients.entries.removeAll { it.value < cutoff }
-            return recentClients.size
+            return recentClients.map { ConnectedDevice(it.key, it.value) }.sortedByDescending { it.lastSeenMs }
         }
+
+    val connectedDeviceCount: Int get() = connectedDevices.size
+
+    /** Downloads/zips currently streaming, plus an active upload if any —
+     *  used to warn the host before stopping the box mid-transfer. */
+    val activeTransferCount: Int
+        get() = activeTransfersCounter.get() + if (UploadProgressTracker.state.value != null) 1 else 0
 
     override fun serve(session: IHTTPSession): Response {
         session.remoteIpAddress?.let { recentClients[it] = System.currentTimeMillis() }
@@ -76,6 +102,7 @@ class JieeHttpServer(
                 session.uri == "/download" -> serveDownload(session)
                 session.uri == "/zip" -> serveZip(session)
                 session.uri == "/logo.png" -> serveLogo()
+                session.uri == "/thumbnail" -> serveThumbnail(session)
                 session.uri == "/upload" && session.method == Method.POST -> serveUpload(session)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
             }
@@ -145,14 +172,18 @@ class JieeHttpServer(
             )
         } ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Fichier introuvable")
 
+        transferLog.log(TransferType.DOWNLOAD, file.displayName, session.remoteIpAddress ?: "inconnu")
+
         val totalLength = file.size
         val rangeHeader = session.headers["range"]
 
         if (rangeHeader == null) {
             // Full-file streaming response. AutoCloseInputStream closes the underlying
             // ParcelFileDescriptor when NanoHTTPD closes the stream after sending —
-            // a plain FileInputStream(pfd.fileDescriptor) would leak the fd.
-            val stream: InputStream = ParcelFileDescriptor.AutoCloseInputStream(pfd)
+            // a plain FileInputStream(pfd.fileDescriptor) would leak the fd. Wrapped
+            // in a bigger buffer + a counter so "active transfers" stays accurate.
+            val raw: InputStream = ParcelFileDescriptor.AutoCloseInputStream(pfd)
+            val stream: InputStream = CountingInputStream(BufferedInputStream(raw, COPY_BUFFER_SIZE), activeTransfersCounter)
             val response = newFixedLengthResponse(Response.Status.OK, file.mimeType, stream, totalLength)
             response.addHeader("Accept-Ranges", "bytes")
             response.addHeader("Content-Disposition", contentDispositionFor(file.displayName))
@@ -168,8 +199,9 @@ class JieeHttpServer(
                 ).also { it.addHeader("Content-Range", "bytes */$totalLength") }
             }
 
-        val stream = ParcelFileDescriptor.AutoCloseInputStream(pfd)
-        stream.skip(start)
+        val rawStream = ParcelFileDescriptor.AutoCloseInputStream(pfd)
+        rawStream.skip(start)
+        val stream = CountingInputStream(BufferedInputStream(rawStream, COPY_BUFFER_SIZE), activeTransfersCounter)
         val chunkLength = end - start + 1
 
         val response = newFixedLengthResponse(
@@ -199,17 +231,29 @@ class JieeHttpServer(
         }
 
         val pipedOut = PipedOutputStream()
-        val pipedIn = PipedInputStream(pipedOut, 128 * 1024)
+        val pipedIn = PipedInputStream(pipedOut, COPY_BUFFER_SIZE)
+        activeTransfersCounter.incrementAndGet()
+
+        val zipName = (dir.lastOrNull() ?: boxName) + ".zip"
+        transferLog.log(TransferType.ZIP, zipName, session.remoteIpAddress ?: "inconnu")
 
         Thread {
             try {
                 ZipOutputStream(pipedOut).use { zos ->
+                    // Most of what real users zip here (photos, videos, mp3, pdf,
+                    // iso) is already compressed — running DEFLATE over it again
+                    // burns CPU for no size benefit and is the single biggest
+                    // lever we have over zip *speed* specifically. STORED-speed
+                    // (level 0) keeps the archive format but skips that wasted work.
+                    zos.setLevel(Deflater.NO_COMPRESSION)
                     for (f in filesToZip) {
                         val relativeParts = f.folderPath.drop(dir.size) + f.displayName
                         val entryName = relativeParts.joinToString("/")
                         try {
                             zos.putNextEntry(ZipEntry(entryName))
-                            context.contentResolver.openInputStream(Uri.parse(f.uri))?.use { it.copyTo(zos) }
+                            context.contentResolver.openInputStream(Uri.parse(f.uri))?.use {
+                                it.copyTo(zos, bufferSize = COPY_BUFFER_SIZE)
+                            }
                             zos.closeEntry()
                         } catch (_: Exception) {
                             // Skip a file that failed mid-zip (e.g. permission revoked)
@@ -219,13 +263,61 @@ class JieeHttpServer(
                 }
             } catch (_: Exception) {
                 // Reader side (NanoHTTPD) will simply see the pipe end/error out.
+            } finally {
+                activeTransfersCounter.decrementAndGet()
             }
         }.start()
 
-        val zipName = (dir.lastOrNull() ?: boxName) + ".zip"
         val response = newChunkedResponse(Response.Status.OK, "application/zip", pipedIn)
         response.addHeader("Content-Disposition", contentDispositionFor(zipName))
         return response
+    }
+
+    /**
+     * Small downscaled preview for an image file, used by the client page's
+     * gallery-style thumbnails instead of a generic icon. Decoded with
+     * inSampleSize so we never inflate the full-resolution bitmap into memory
+     * just to show a 64px preview.
+     */
+    private fun serveThumbnail(session: IHTTPSession): Response {
+        val id = session.parms["id"]
+            ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Missing id")
+        val file = repository.getById(id)
+            ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Fichier introuvable")
+        if (!file.available || !file.mimeType.startsWith("image")) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Aperçu indisponible")
+        }
+
+        return try {
+            val uri = Uri.parse(file.uri)
+            val targetSize = 96
+
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use {
+                android.graphics.BitmapFactory.decodeStream(it, null, bounds)
+            }
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= targetSize && bounds.outHeight / (sample * 2) >= targetSize) {
+                sample *= 2
+            }
+
+            val decodeOpts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            val bitmap = context.contentResolver.openInputStream(uri)?.use {
+                android.graphics.BitmapFactory.decodeStream(it, null, decodeOpts)
+            } ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Aperçu indisponible")
+
+            val bytes = ByteArrayOutputStream().use { out ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out)
+                out.toByteArray()
+            }
+            val response = newFixedLengthResponse(
+                Response.Status.OK, "image/jpeg", ByteArrayInputStream(bytes), bytes.size.toLong()
+            )
+            response.addHeader("Cache-Control", "public, max-age=3600")
+            response
+        } catch (e: Exception) {
+            newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Aperçu indisponible")
+        }
     }
 
     /**
@@ -293,6 +385,8 @@ class JieeHttpServer(
                     fromIp = fromIp
                 )
             )
+            transferLog.log(TransferType.UPLOAD, originalName, fromIp)
+            notifyFileReceived(originalName, fromIp)
 
             val response = newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", "OK")
             addNoCacheHeaders(response)
@@ -302,6 +396,36 @@ class JieeHttpServer(
         } finally {
             progressWatcher?.interrupt()
             UploadProgressTracker.clear()
+        }
+    }
+
+    /**
+     * A separate, higher-importance channel from the ongoing "BOX active" one
+     * (see BoxService) — each incoming upload gets its own transient
+     * notification, since the host asked to know as soon as a file arrives
+     * rather than having to keep the app open and watch the "Reçus" tab.
+     */
+    private fun notifyFileReceived(fileName: String, fromIp: String) {
+        try {
+            val manager = context.getSystemService(android.app.NotificationManager::class.java) ?: return
+            val channelId = "jiee_box_received_channel"
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                if (manager.getNotificationChannel(channelId) == null) {
+                    val channel = android.app.NotificationChannel(
+                        channelId, "Fichiers reçus", android.app.NotificationManager.IMPORTANCE_DEFAULT
+                    )
+                    manager.createNotificationChannel(channel)
+                }
+            }
+            val notification = NotificationCompat.Builder(context, channelId)
+                .setContentTitle("📥 Nouveau fichier reçu")
+                .setContentText("$fileName — depuis $fromIp")
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setAutoCancel(true)
+                .build()
+            manager.notify(System.currentTimeMillis().toInt(), notification)
+        } catch (_: Exception) {
+            // Notification is a nice-to-have; never let it break the upload itself.
         }
     }
 
@@ -382,5 +506,31 @@ class JieeHttpServer(
         response.addHeader("Cache-Control", "no-cache, no-store, must-revalidate")
         response.addHeader("Pragma", "no-cache")
         response.addHeader("Expires", "0")
+    }
+
+    /** Wraps a download stream so the active-transfer counter (used to warn
+     *  before stopping the box mid-transfer) stays accurate: +1 for as long
+     *  as NanoHTTPD is actively reading it, -1 the moment it's closed
+     *  (finished, cancelled, or the client disconnected). */
+    private class CountingInputStream(
+        private val delegate: InputStream,
+        private val counter: AtomicInteger
+    ) : InputStream() {
+        init { counter.incrementAndGet() }
+        private var closed = false
+
+        override fun read(): Int = delegate.read()
+        override fun read(b: ByteArray): Int = delegate.read(b)
+        override fun read(b: ByteArray, off: Int, len: Int): Int = delegate.read(b, off, len)
+        override fun skip(n: Long): Long = delegate.skip(n)
+        override fun available(): Int = delegate.available()
+
+        override fun close() {
+            if (!closed) {
+                closed = true
+                counter.decrementAndGet()
+            }
+            delegate.close()
+        }
     }
 }

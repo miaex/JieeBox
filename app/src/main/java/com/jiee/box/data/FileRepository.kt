@@ -136,6 +136,18 @@ class FileRepository(private val context: Context) {
 
     fun getById(id: String): PublishedFile? = _files.find { it.id == id }
 
+    /** Renames a file for display/download purposes only — never touches the
+     *  original file on disk, just the label the web client sees. */
+    fun renameFile(id: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isBlank()) return
+        val idx = _files.indexOfFirst { it.id == id }
+        if (idx >= 0) {
+            _files[idx] = _files[idx].copy(displayName = trimmed)
+            saveToDisk()
+        }
+    }
+
     /**
      * Re-check that every published file is still reachable (permission not revoked,
      * file not deleted/moved). Files that fail are flagged `available = false` rather

@@ -23,6 +23,8 @@ data class BoxServerState(
     val isRunning: Boolean = false,
     val address: String? = null,
     val connectedDevices: Int = 0,
+    val devices: List<JieeHttpServer.ConnectedDevice> = emptyList(),
+    val activeTransfers: Int = 0,
     val error: String? = null
 )
 
@@ -79,6 +81,7 @@ class BoxService : Service() {
 
         val repository = (application as JieeBoxApplication).fileRepository
         val receivedRepository = (application as JieeBoxApplication).receivedFileRepository
+        val transferLog = (application as JieeBoxApplication).transferLogRepository
         val settings = (application as JieeBoxApplication).settingsRepository.get()
         repository.refreshAvailability()
 
@@ -94,7 +97,7 @@ class BoxService : Service() {
 
         try {
             val newServer = JieeHttpServer(
-                PORT, applicationContext, repository, receivedRepository, settings.boxName, settings.password
+                PORT, applicationContext, repository, receivedRepository, transferLog, settings.boxName, settings.password
             )
             newServer.start(NanoHTTPDTimeout, true)
             server = newServer
@@ -130,13 +133,18 @@ class BoxService : Service() {
         _state.value = BoxServerState(isRunning = false)
     }
 
-    /** Periodically refresh the "N appareils connectés" count shown in the UI. */
+    /** Periodically refresh the connected-devices list and active-transfer
+     *  count shown in the UI. */
     private fun startPresencePolling() {
         val runnable = object : Runnable {
             override fun run() {
                 val s = server
                 if (s != null) {
-                    _state.value = _state.value.copy(connectedDevices = s.connectedDeviceCount)
+                    _state.value = _state.value.copy(
+                        connectedDevices = s.connectedDeviceCount,
+                        devices = s.connectedDevices,
+                        activeTransfers = s.activeTransferCount
+                    )
                     updateNotification()
                     handler.postDelayed(this, 5_000)
                 }

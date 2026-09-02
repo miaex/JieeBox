@@ -4,16 +4,19 @@ import android.app.Application
 import com.jiee.box.data.FileRepository
 import com.jiee.box.data.ReceivedFileRepository
 import com.jiee.box.data.SettingsRepository
+import com.jiee.box.data.TransferLogRepository
 
 class JieeBoxApplication : Application() {
     // Single shared instances: both the UI (MainActivity/ViewModel) and the
     // background HTTP server (running in BoxService) need to see the same
-    // published-file list, received-file list, and box settings.
+    // published-file list, received-file list, box settings, and transfer log.
     lateinit var fileRepository: FileRepository
         private set
     lateinit var receivedFileRepository: ReceivedFileRepository
         private set
     lateinit var settingsRepository: SettingsRepository
+        private set
+    lateinit var transferLogRepository: TransferLogRepository
         private set
 
     override fun onCreate() {
@@ -28,5 +31,6 @@ class JieeBoxApplication : Application() {
         fileRepository = FileRepository(this)
         receivedFileRepository = ReceivedFileRepository(this)
         settingsRepository = SettingsRepository(this)
+        transferLogRepository = TransferLogRepository(this)
     }
 }

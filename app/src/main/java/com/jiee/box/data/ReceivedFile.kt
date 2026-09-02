@@ -57,6 +57,18 @@ class ReceivedFileRepository(private val context: Context) {
 
     fun getById(id: String): ReceivedFile? = _files.find { it.id == id }
 
+    /** Renames before publishing (or after — harmless either way), per the
+     *  request to be able to rename a received file before sharing it back out. */
+    fun rename(id: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isBlank()) return
+        val idx = _files.indexOfFirst { it.id == id }
+        if (idx >= 0) {
+            _files[idx] = _files[idx].copy(displayName = trimmed)
+            saveToDisk()
+        }
+    }
+
     private fun saveToDisk() {
         val array = JSONArray()
         for (f in _files) {

@@ -51,10 +51,17 @@ object WebUi {
         }
 
         val fileRows = sortedFiles.joinToString("\n") { f ->
+            val iconHtml = if (f.mimeType.startsWith("image")) {
+                """<span class="file-icon-wrap"><img class="file-thumb" src="/thumbnail?id=${f.id}" loading="lazy" alt=""
+                     onerror="this.style.display='none';this.nextElementSibling.style.display='inline'">
+                   <span class="file-icon" style="display:none">${iconFor(f.mimeType)}</span></span>"""
+            } else {
+                """<span class="file-icon">${iconFor(f.mimeType)}</span>"""
+            }
             """
             <div class="file-row">
               <div class="file-info">
-                <span class="file-icon">${iconFor(f.mimeType)}</span>
+                $iconHtml
                 <span class="file-name">${escape(f.displayName)}</span>
                 <span class="file-size">${f.size.toHumanSize()}</span>
               </div>
@@ -81,6 +88,9 @@ object WebUi {
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <meta name="theme-color" content="#241C17">
+          <link rel="icon" type="image/png" href="/logo.png">
+          <link rel="apple-touch-icon" href="/logo.png">
           <title>${escape(boxName)}</title>
           <style>
             :root { color-scheme: dark; }
@@ -96,11 +106,17 @@ object WebUi {
               padding: 28px 20px 18px; text-align: center;
               background: linear-gradient(180deg, #2E2620, #241C17);
               border-bottom: 1px solid #3D332B;
+              position: relative;
             }
             .logo { width: 56px; height: 56px; border-radius: 16px; display: block; margin: 0 auto 10px; box-shadow: 0 4px 14px rgba(240, 130, 78, 0.25); }
             header h1 { margin: 0; font-size: 21px; letter-spacing: 0.5px; color: #F3E9DD; }
             header p.tagline { margin: 3px 0 0; color: #8A796C; font-size: 12px; font-style: italic; }
             header p.stats { margin: 8px 0 0; color: #B7A48F; font-size: 13px; }
+            .help-btn {
+              position: absolute; top: 16px; right: 16px;
+              background: #2E2620; border: 1px solid #3D332B; color: #B7A48F;
+              font-size: 12px; padding: 7px 11px; border-radius: 20px; cursor: pointer;
+            }
             .toolbar {
               max-width: 640px; margin: 14px auto 0; padding: 0 16px;
               display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
@@ -128,12 +144,21 @@ object WebUi {
               display: flex; align-items: center; justify-content: space-between;
               background: #2E2620; border: 1px solid #3D332B; border-radius: 12px;
               padding: 12px 14px; margin-bottom: 10px;
+              animation: fadeInUp 0.25s ease both;
+              transition: transform 0.12s ease, background 0.12s ease;
+            }
+            .file-row:hover { background: #35291F; transform: translateY(-1px); }
+            @keyframes fadeInUp {
+              from { opacity: 0; transform: translateY(6px); }
+              to { opacity: 1; transform: translateY(0); }
             }
             .folder-row { text-decoration: none; color: inherit; }
             .chevron { color: #F0824E; font-size: 18px; padding-left: 8px; }
             .file-info { display: flex; align-items: center; gap: 10px; overflow: hidden; }
             .file-icon { font-size: 20px; }
-            .file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; color: #F3E9DD; }
+            .file-icon-wrap { display: inline-flex; }
+            .file-thumb { width: 32px; height: 32px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
+            .file-name { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; color: #F3E9DD; }
             .file-size { font-size: 12px; color: #B7A48F; flex-shrink: 0; }
             .dl-btn {
               flex-shrink: 0; margin-left: 10px; text-decoration: none;
@@ -165,10 +190,35 @@ object WebUi {
             .upload-bar-track { flex: 1; height: 6px; background: #3D332B; border-radius: 4px; overflow: hidden; }
             .upload-bar-fill { height: 100%; width: 0%; background: #7FA6E8; transition: width 0.15s ease; }
             .upload-status { flex-shrink: 0; width: 56px; text-align: right; color: #B7A48F; }
+
+            .modal-overlay {
+              display: none; position: fixed; inset: 0; background: rgba(15, 11, 8, 0.72);
+              align-items: center; justify-content: center; z-index: 100; padding: 20px;
+            }
+            .modal-card {
+              background: #2E2620; border: 1px solid #3D332B; border-radius: 16px;
+              max-width: 480px; width: 100%; max-height: 80vh; overflow-y: auto;
+              padding: 20px;
+            }
+            .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+            .modal-header h2 { margin: 0; font-size: 17px; color: #F3E9DD; }
+            .modal-close { background: none; border: none; color: #B7A48F; font-size: 20px; cursor: pointer; padding: 4px 8px; }
+            .lang-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+            .lang-tab {
+              flex: 1; text-align: center; padding: 7px; border-radius: 8px; font-size: 12px;
+              background: #241C17; color: #B7A48F; cursor: pointer; border: 1px solid #3D332B;
+            }
+            .lang-tab.active { background: #7FA6E8; color: #1B1512; font-weight: 700; border-color: #7FA6E8; }
+            .howto-body { font-size: 13.5px; line-height: 1.6; color: #E4D9CB; }
+            .howto-body h3 { font-size: 14px; color: #F0824E; margin: 14px 0 6px; }
+            .howto-body ol, .howto-body ul { margin: 4px 0; padding-left: 20px; }
+            .howto-lang { display: none; }
+            .howto-lang.active { display: block; }
           </style>
         </head>
         <body>
           <header>
+            <button class="help-btn" onclick="document.getElementById('howToModal').style.display='flex'">❓ Aide</button>
             <img class="logo" src="/logo.png" alt="${escape(boxName)}">
             <h1>${escape(boxName)}</h1>
             <p class="tagline">Votre espace de partage local, privé et sans internet</p>
@@ -199,6 +249,8 @@ object WebUi {
             <div class="brand-tagline">Une solution conçue par <strong>Jérémie K. ETSO</strong></div>
             <div class="brand-sub">Penser le partage de fichiers autrement — local, instantané, sans dépendre d'internet.</div>
           </footer>
+
+          ${howToModalHtml()}
 
           <script>
             function filterRows() {
@@ -251,11 +303,67 @@ object WebUi {
                 xhr.send(formData);
               });
             }
+
+            function jieeSetLang(lang) {
+              document.querySelectorAll('.lang-tab').forEach(function (t) { t.classList.remove('active'); });
+              document.querySelectorAll('.howto-lang').forEach(function (b) { b.classList.remove('active'); });
+              document.getElementById('langTab-' + lang).classList.add('active');
+              document.getElementById('howtoBody-' + lang).classList.add('active');
+            }
+
+            document.getElementById('howToModal').addEventListener('click', function (e) {
+              if (e.target === this) this.style.display = 'none';
+            });
           </script>
         </body>
         </html>
         """.trimIndent()
     }
+
+    /**
+     * A short bilingual usage guide the client can read without leaving the
+     * page and without it being a downloadable "file" mixed in with real
+     * content — a modal fits the "lit puis ferme sans quitter la page"
+     * request more cleanly than pretending it's an entry in the file list.
+     */
+    private fun howToModalHtml(): String = """
+        <div class="modal-overlay" id="howToModal">
+          <div class="modal-card">
+            <div class="modal-header">
+              <h2>Comment utiliser / How To Use</h2>
+              <button class="modal-close" onclick="document.getElementById('howToModal').style.display='none'">✕</button>
+            </div>
+            <div class="lang-tabs">
+              <div class="lang-tab active" id="langTab-fr" onclick="jieeSetLang('fr')">Français</div>
+              <div class="lang-tab" id="langTab-en" onclick="jieeSetLang('en')">English</div>
+            </div>
+            <div class="howto-body howto-lang active" id="howtoBody-fr">
+              <h3>📥 Télécharger un fichier</h3>
+              <p>Ouvre un dossier si besoin, puis appuie sur <strong>Télécharger</strong> à côté du fichier voulu.</p>
+              <h3>📤 Envoyer un fichier vers la Box</h3>
+              <p>En bas de la page, appuie sur <strong>Envoyer des fichiers vers la Box</strong>, choisis un ou plusieurs fichiers. Une barre de progression s'affiche pendant l'envoi.</p>
+              <h3>🔍 Rechercher / trier</h3>
+              <p>Utilise la barre de recherche en haut, ou les liens <strong>Nom</strong> / <strong>Taille</strong> pour trier.</p>
+              <h3>📦 Tout télécharger d'un coup</h3>
+              <p>Le bouton <strong>.zip</strong> télécharge tout le dossier affiché en une seule archive.</p>
+              <h3>ℹ️ À savoir</h3>
+              <p>Tout se passe en local, sur le Wi-Fi du téléphone hôte — aucune connexion internet n'est utilisée ni nécessaire.</p>
+            </div>
+            <div class="howto-body howto-lang" id="howtoBody-en">
+              <h3>📥 Download a file</h3>
+              <p>Open a folder if needed, then tap <strong>Télécharger</strong> next to the file you want.</p>
+              <h3>📤 Send a file to the Box</h3>
+              <p>At the bottom of the page, tap <strong>Envoyer des fichiers vers la Box</strong> and pick one or more files. A progress bar shows while it uploads.</p>
+              <h3>🔍 Search / sort</h3>
+              <p>Use the search box at the top, or the <strong>Nom</strong> (Name) / <strong>Taille</strong> (Size) links to sort.</p>
+              <h3>📦 Download everything at once</h3>
+              <p>The <strong>.zip</strong> button downloads the whole current folder as one archive.</p>
+              <h3>ℹ️ Good to know</h3>
+              <p>Everything happens locally over the host phone's Wi-Fi — no internet connection is used or required.</p>
+            </div>
+          </div>
+        </div>
+    """.trimIndent()
 
     private fun sortFiles(list: List<PublishedFile>, sort: String): List<PublishedFile> = when (sort) {
         "name_desc" -> list.sortedByDescending { it.displayName.lowercase() }

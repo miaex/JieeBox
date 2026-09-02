@@ -1,6 +1,7 @@
 package com.jiee.box.ui
 
 import android.graphics.Bitmap
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,11 +15,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jiee.box.data.BoxSettings
 import com.jiee.box.data.PublishedFile
 import com.jiee.box.data.ReceivedFile
+import com.jiee.box.data.TransferLogEntry
+import com.jiee.box.data.TransferType
 import com.jiee.box.data.UploadProgress
 import com.jiee.box.data.toHumanSize
 import com.jiee.box.service.BoxServerState
@@ -31,23 +35,30 @@ import java.util.Locale
 fun HomeScreen(
     files: List<PublishedFile>,
     receivedFiles: List<ReceivedFile>,
+    transferLog: List<TransferLogEntry>,
     serverState: BoxServerState,
     settings: BoxSettings,
     totalSize: Long,
     isImporting: Boolean,
     uploadProgress: UploadProgress?,
+    showHelpInitially: Boolean,
     onAddFiles: () -> Unit,
     onAddFolder: () -> Unit,
     onRemoveFile: (String) -> Unit,
     onRemoveFiles: (Set<String>) -> Unit,
+    onRenameFile: (String, String) -> Unit,
     onPublishReceived: (String) -> Unit,
     onRemoveReceived: (String) -> Unit,
+    onRenameReceived: (String, String) -> Unit,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onCopyAddress: () -> Unit,
-    onSaveSettings: (BoxSettings) -> Unit
+    onSaveSettings: (BoxSettings) -> Unit,
+    onHelpDismissed: () -> Unit
 ) {
     var showSettings by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(showHelpInitially) }
+    var showStopConfirm by remember { mutableStateOf(false) }
     var tabIndex by remember { mutableStateOf(0) }
 
     Scaffold(containerColor = JieeBackground) { padding ->
@@ -70,8 +81,13 @@ fun HomeScreen(
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
                 }
-                IconButton(onClick = { showSettings = true }) {
-                    Text("⚙️", fontSize = 20.sp)
+                Row {
+                    IconButton(onClick = { showHelp = true }) {
+                        Text("❓", fontSize = 18.sp)
+                    }
+                    IconButton(onClick = { showSettings = true }) {
+                        Text("⚙️", fontSize = 20.sp)
+                    }
                 }
             }
 
@@ -92,55 +108,66 @@ fun HomeScreen(
                 Tab(
                     selected = tabIndex == 0,
                     onClick = { tabIndex = 0 },
-                    text = { Text("Publiés (${files.size})") }
+                    text = { Text("Publiés (${files.size})", fontSize = 12.sp) }
                 )
                 Tab(
                     selected = tabIndex == 1,
                     onClick = { tabIndex = 1 },
-                    text = { Text("📥 Reçus (${receivedFiles.count { !it.published }})") }
+                    text = { Text("📥 Reçus (${receivedFiles.count { !it.published }})", fontSize = 12.sp) }
+                )
+                Tab(
+                    selected = tabIndex == 2,
+                    onClick = { tabIndex = 2 },
+                    text = { Text("🕓 Historique", fontSize = 12.sp) }
                 )
             }
 
             Spacer(Modifier.height(8.dp))
 
-            if (tabIndex == 0) {
-                PublishedTab(
-                    files = files,
-                    totalSize = totalSize,
-                    onRemoveFile = onRemoveFile,
-                    onRemoveFiles = onRemoveFiles,
-                    modifier = Modifier.weight(1f)
-                )
-                if (isImporting) {
-                    Text(
-                        "⏳ Importation en cours...",
-                        color = JieeTerracotta, fontSize = 12.sp,
-                        modifier = Modifier.padding(top = 4.dp)
+            when (tabIndex) {
+                0 -> {
+                    PublishedTab(
+                        files = files,
+                        totalSize = totalSize,
+                        onRemoveFile = onRemoveFile,
+                        onRemoveFiles = onRemoveFiles,
+                        onRenameFile = onRenameFile,
+                        modifier = Modifier.weight(1f)
                     )
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    OutlinedButton(onClick = onAddFiles, enabled = !isImporting, modifier = Modifier.weight(1f)) {
-                        Text("+ Fichiers")
+                    if (isImporting) {
+                        Text(
+                            "⏳ Importation en cours...",
+                            color = JieeTerracotta, fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
-                    OutlinedButton(onClick = onAddFolder, enabled = !isImporting, modifier = Modifier.weight(1f)) {
-                        Text("+ Dossier")
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = onAddFiles, enabled = !isImporting, modifier = Modifier.weight(1f)) {
+                            Text("+ Fichiers")
+                        }
+                        OutlinedButton(onClick = onAddFolder, enabled = !isImporting, modifier = Modifier.weight(1f)) {
+                            Text("+ Dossier")
+                        }
                     }
                 }
-            } else {
-                ReceivedTab(
+                1 -> ReceivedTab(
                     receivedFiles = receivedFiles,
                     onPublish = onPublishReceived,
                     onRemove = onRemoveReceived,
+                    onRename = onRenameReceived,
                     modifier = Modifier.weight(1f)
                 )
+                else -> HistoryTab(entries = transferLog, modifier = Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(10.dp))
 
             if (serverState.isRunning) {
                 Button(
-                    onClick = onStop,
+                    onClick = {
+                        if (serverState.activeTransfers > 0) showStopConfirm = true else onStop()
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = JieeTerracottaDeep),
                     modifier = Modifier.fillMaxWidth().height(52.dp)
                 ) {
@@ -166,7 +193,7 @@ fun HomeScreen(
                 "JIEE BOX · conçu par Jérémie K. ETSO",
                 fontSize = 10.sp, color = JieeTextSecondary,
                 modifier = Modifier.fillMaxWidth(),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                textAlign = TextAlign.Center
             )
         }
     }
@@ -182,6 +209,54 @@ fun HomeScreen(
             }
         )
     }
+
+    if (showHelp) {
+        HelpDialog(onDismiss = {
+            showHelp = false
+            onHelpDismissed()
+        })
+    }
+
+    if (showStopConfirm) {
+        AlertDialog(
+            onDismissRequest = { showStopConfirm = false },
+            title = { Text("Transfert en cours") },
+            text = {
+                Text("${serverState.activeTransfers} transfert(s) en cours. Arrêter la Box va les interrompre. Continuer ?")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showStopConfirm = false
+                    onStop()
+                }) { Text("Arrêter quand même", color = JieeTerracottaDeep) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStopConfirm = false }) { Text("Annuler") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun HelpDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Comment ça marche") },
+        text = {
+            Column {
+                Text("1. Active le hotspot Wi-Fi du téléphone.", fontSize = 13.sp, color = JieeTextPrimary)
+                Spacer(Modifier.height(6.dp))
+                Text("2. Ajoute des fichiers ou un dossier, puis appuie sur Démarrer la Box.", fontSize = 13.sp, color = JieeTextPrimary)
+                Spacer(Modifier.height(6.dp))
+                Text("3. Sur l'autre appareil : connecte-toi au hotspot, puis scanne le QR code (bouton bleu) ou tape l'adresse technique.", fontSize = 13.sp, color = JieeTextPrimary)
+                Spacer(Modifier.height(6.dp))
+                Text("4. Le client peut télécharger tes fichiers, ou t'en envoyer via le bouton en bas de sa page — tu les retrouves dans l'onglet Reçus.", fontSize = 13.sp, color = JieeTextPrimary)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Compris") }
+        }
+    )
 }
 
 @Composable
@@ -219,12 +294,14 @@ private fun PublishedTab(
     totalSize: Long,
     onRemoveFile: (String) -> Unit,
     onRemoveFiles: (Set<String>) -> Unit,
+    onRenameFile: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
     var expandedFolders by remember { mutableStateOf(setOf<String>()) }
     var folderPendingDelete by remember { mutableStateOf<String?>(null) }
+    var fileBeingRenamed by remember { mutableStateOf<PublishedFile?>(null) }
 
     LaunchedEffect(files) {
         val validIds = files.map { it.id }.toSet()
@@ -302,7 +379,8 @@ private fun PublishedTab(
                         onToggleSelect = {
                             selectedIds = if (file.id in selectedIds) selectedIds - file.id else selectedIds + file.id
                         },
-                        onRemove = { onRemoveFile(file.id) }
+                        onRemove = { onRemoveFile(file.id) },
+                        onRename = { fileBeingRenamed = file }
                     )
                 }
 
@@ -335,6 +413,7 @@ private fun PublishedTab(
                                     selectedIds = if (file.id in selectedIds) selectedIds - file.id else selectedIds + file.id
                                 },
                                 onRemove = { onRemoveFile(file.id) },
+                                onRename = { fileBeingRenamed = file },
                                 indented = true
                             )
                         }
@@ -366,6 +445,40 @@ private fun PublishedTab(
             }
         )
     }
+
+    fileBeingRenamed?.let { file ->
+        RenameDialog(
+            currentName = file.displayName,
+            onDismiss = { fileBeingRenamed = null },
+            onConfirm = {
+                onRenameFile(file.id, it)
+                fileBeingRenamed = null
+            }
+        )
+    }
+}
+
+@Composable
+private fun RenameDialog(currentName: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+    var name by remember { mutableStateOf(currentName) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Renommer") },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { if (name.isNotBlank()) onConfirm(name) }) { Text("Renommer") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Annuler") }
+        }
+    )
 }
 
 @Composable
@@ -417,8 +530,11 @@ private fun ReceivedTab(
     receivedFiles: List<ReceivedFile>,
     onPublish: (String) -> Unit,
     onRemove: (String) -> Unit,
+    onRename: (String, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var fileBeingRenamed by remember { mutableStateOf<ReceivedFile?>(null) }
+
     Column(modifier = modifier) {
         Text(
             "Fichiers envoyés par des appareils clients — restent privés tant que tu ne cliques pas sur \"Publier\".",
@@ -432,7 +548,71 @@ private fun ReceivedTab(
         } else {
             LazyColumn(modifier = Modifier.weight(1f)) {
                 items(receivedFiles, key = { it.id }) { file ->
-                    ReceivedFileRow(file, onPublish = { onPublish(file.id) }, onRemove = { onRemove(file.id) })
+                    ReceivedFileRow(
+                        file,
+                        onPublish = { onPublish(file.id) },
+                        onRemove = { onRemove(file.id) },
+                        onRename = { fileBeingRenamed = file }
+                    )
+                }
+            }
+        }
+    }
+
+    fileBeingRenamed?.let { file ->
+        RenameDialog(
+            currentName = file.displayName,
+            onDismiss = { fileBeingRenamed = null },
+            onConfirm = {
+                onRename(file.id, it)
+                fileBeingRenamed = null
+            }
+        )
+    }
+}
+
+private val historyTimeFormat = SimpleDateFormat("dd/MM HH:mm", Locale.FRANCE)
+
+@Composable
+private fun HistoryTab(entries: List<TransferLogEntry>, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
+        Text(
+            "Activité récente — téléchargements, envois et archives .zip.",
+            fontSize = 11.sp, color = JieeTextSecondary,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        if (entries.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text("Aucune activité pour le moment.", color = JieeTextSecondary)
+            }
+        } else {
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(entries, key = { "${it.timestamp}_${it.fileName}" }) { entry ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .background(JieeSurface, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            when (entry.type) {
+                                TransferType.DOWNLOAD -> "⬇️"
+                                TransferType.UPLOAD -> "⬆️"
+                                TransferType.ZIP -> "📦"
+                            },
+                            fontSize = 16.sp
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(entry.fileName, color = JieeTextPrimary, fontSize = 13.sp, maxLines = 1)
+                            Text(
+                                "${historyTimeFormat.format(Date(entry.timestamp))} · ${entry.ip}",
+                                color = JieeTextSecondary, fontSize = 11.sp
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -495,6 +675,7 @@ private fun StatusCard(state: BoxServerState, onCopyAddress: () -> Unit) {
     var showQr by remember { mutableStateOf(false) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var showAddress by remember { mutableStateOf(false) }
+    var showDevices by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -548,7 +729,30 @@ private fun StatusCard(state: BoxServerState, onCopyAddress: () -> Unit) {
                 }
             }
             Spacer(Modifier.height(6.dp))
-            Text("${state.connectedDevices} appareil(s) connecté(s)", color = JieeTextSecondary, fontSize = 12.sp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showDevices = !showDevices },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("${state.connectedDevices} appareil(s) connecté(s)", color = JieeTextSecondary, fontSize = 12.sp)
+                if (state.devices.isNotEmpty()) {
+                    Text(if (showDevices) "︿" else "﹀", color = JieeTextSecondary, fontSize = 12.sp)
+                }
+            }
+            if (showDevices && state.devices.isNotEmpty()) {
+                Column(Modifier.animateContentSize().padding(top = 4.dp)) {
+                    state.devices.forEach { device ->
+                        val secondsAgo = ((System.currentTimeMillis() - device.lastSeenMs) / 1000).coerceAtLeast(0)
+                        Text(
+                            "• ${device.ip} — vu il y a ${secondsAgo}s",
+                            fontSize = 11.sp, color = JieeTextSecondary,
+                            modifier = Modifier.padding(vertical = 1.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -584,6 +788,7 @@ private fun FileRow(
     selected: Boolean,
     onToggleSelect: () -> Unit,
     onRemove: () -> Unit,
+    onRename: () -> Unit,
     indented: Boolean = false
 ) {
     Row(
@@ -613,6 +818,9 @@ private fun FileRow(
             )
         }
         if (!selectionMode) {
+            TextButton(onClick = onRename) {
+                Text("✏️", fontSize = 13.sp)
+            }
             TextButton(onClick = onRemove) {
                 Text("Retirer", color = JieeTextSecondary, fontSize = 12.sp)
             }
@@ -623,7 +831,7 @@ private fun FileRow(
 private val receivedDateFormat = SimpleDateFormat("dd/MM HH:mm", Locale.FRANCE)
 
 @Composable
-private fun ReceivedFileRow(file: ReceivedFile, onPublish: () -> Unit, onRemove: () -> Unit) {
+private fun ReceivedFileRow(file: ReceivedFile, onPublish: () -> Unit, onRemove: () -> Unit, onRename: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -644,6 +852,9 @@ private fun ReceivedFileRow(file: ReceivedFile, onPublish: () -> Unit, onRemove:
                 OutlinedButton(onClick = onPublish, modifier = Modifier.height(34.dp)) {
                     Text("Publier", fontSize = 12.sp)
                 }
+            }
+            TextButton(onClick = onRename, modifier = Modifier.height(34.dp)) {
+                Text("✏️ Renommer", fontSize = 12.sp, color = JieeTextSecondary)
             }
             TextButton(onClick = onRemove, modifier = Modifier.height(34.dp)) {
                 Text("Supprimer", color = JieeTerracottaDeep, fontSize = 12.sp)

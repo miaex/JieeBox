@@ -55,10 +55,14 @@ class MainActivity : ComponentActivity() {
 
         requestBatteryOptimizationExemptionOnce()
 
+        val onboardingPrefs = getSharedPreferences("jiee_box_onboarding", Context.MODE_PRIVATE)
+        val showHelpInitially = !onboardingPrefs.getBoolean("seen_help", false)
+
         setContent {
             JieeBoxTheme {
                 val files by viewModel.files.collectAsState()
                 val receivedFiles by viewModel.receivedFiles.collectAsState()
+                val transferLog by viewModel.transferLog.collectAsState()
                 val serverState by viewModel.serverState.collectAsState()
                 val settings by viewModel.settings.collectAsState()
                 val isImporting by viewModel.isImporting.collectAsState()
@@ -67,21 +71,26 @@ class MainActivity : ComponentActivity() {
                 HomeScreen(
                     files = files,
                     receivedFiles = receivedFiles,
+                    transferLog = transferLog,
                     serverState = serverState,
                     settings = settings,
                     totalSize = viewModel.totalSize,
                     isImporting = isImporting,
                     uploadProgress = uploadProgress,
+                    showHelpInitially = showHelpInitially,
                     onAddFiles = { pickFiles.launch(arrayOf("*/*")) },
                     onAddFolder = { pickFolder.launch(null) },
                     onRemoveFile = viewModel::removeFile,
                     onRemoveFiles = viewModel::removeFiles,
+                    onRenameFile = viewModel::renameFile,
                     onPublishReceived = viewModel::publishReceivedFile,
                     onRemoveReceived = viewModel::removeReceivedFile,
+                    onRenameReceived = viewModel::renameReceivedFile,
                     onStart = viewModel::startBox,
                     onStop = viewModel::stopBox,
                     onCopyAddress = { copyAddressToClipboard(serverState.address) },
-                    onSaveSettings = viewModel::saveSettings
+                    onSaveSettings = viewModel::saveSettings,
+                    onHelpDismissed = { onboardingPrefs.edit().putBoolean("seen_help", true).apply() }
                 )
             }
         }

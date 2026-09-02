@@ -8,6 +8,7 @@ import com.jiee.box.JieeBoxApplication
 import com.jiee.box.data.BoxSettings
 import com.jiee.box.data.PublishedFile
 import com.jiee.box.data.ReceivedFile
+import com.jiee.box.data.TransferLogEntry
 import com.jiee.box.data.UploadProgress
 import com.jiee.box.data.UploadProgressTracker
 import com.jiee.box.service.BoxService
@@ -24,12 +25,16 @@ class BoxViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as JieeBoxApplication).fileRepository
     private val receivedRepository = (application as JieeBoxApplication).receivedFileRepository
     private val settingsRepository = (application as JieeBoxApplication).settingsRepository
+    private val transferLogRepository = (application as JieeBoxApplication).transferLogRepository
 
     private val _files = MutableStateFlow<List<PublishedFile>>(emptyList())
     val files: StateFlow<List<PublishedFile>> = _files.asStateFlow()
 
     private val _receivedFiles = MutableStateFlow<List<ReceivedFile>>(emptyList())
     val receivedFiles: StateFlow<List<ReceivedFile>> = _receivedFiles.asStateFlow()
+
+    private val _transferLog = MutableStateFlow<List<TransferLogEntry>>(emptyList())
+    val transferLog: StateFlow<List<TransferLogEntry>> = _transferLog.asStateFlow()
 
     private val _settings = MutableStateFlow(settingsRepository.get())
     val settings: StateFlow<BoxSettings> = _settings.asStateFlow()
@@ -44,13 +49,15 @@ class BoxViewModel(application: Application) : AndroidViewModel(application) {
     init {
         refreshFiles()
         refreshReceivedFiles()
-        // Uploads land via the background HTTP server thread, so the "Reçus"
-        // list needs polling rather than push updates to stay current while
-        // the host is looking at the screen.
+        refreshTransferLog()
+        // Uploads/downloads land via the background HTTP server thread, so
+        // these lists need polling rather than push updates to stay current
+        // while the host is looking at the screen.
         viewModelScope.launch {
             while (true) {
                 delay(3_000)
                 refreshReceivedFiles()
+                refreshTransferLog()
             }
         }
     }
@@ -61,6 +68,10 @@ class BoxViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshReceivedFiles() {
         _receivedFiles.value = receivedRepository.files
+    }
+
+    fun refreshTransferLog() {
+        _transferLog.value = transferLogRepository.entries
     }
 
     /** Moves a received (uploaded) file into the published list, making it
@@ -76,6 +87,16 @@ class BoxViewModel(application: Application) : AndroidViewModel(application) {
     fun removeReceivedFile(id: String) {
         receivedRepository.remove(id)
         refreshReceivedFiles()
+    }
+
+    fun renameReceivedFile(id: String, newName: String) {
+        receivedRepository.rename(id, newName)
+        refreshReceivedFiles()
+    }
+
+    fun renameFile(id: String, newName: String) {
+        repository.renameFile(id, newName)
+        refreshFiles()
     }
 
     fun saveSettings(newSettings: BoxSettings) {
