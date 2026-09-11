@@ -18,6 +18,7 @@ import com.jiee.box.server.JieeHttpServer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 
 data class BoxServerState(
     val isRunning: Boolean = false,
@@ -84,6 +85,15 @@ class BoxService : Service() {
         val transferLog = (application as JieeBoxApplication).transferLogRepository
         val settings = (application as JieeBoxApplication).settingsRepository.get()
         repository.refreshAvailability()
+
+        // Any partial chunked-upload leftovers from a previous session are
+        // useless once the box has restarted (the client would need to
+        // re-select the file anyway) — clear them so they don't quietly
+        // accumulate in the app's cache over time.
+        try {
+            File(applicationContext.cacheDir, "chunks").deleteRecursively()
+        } catch (_: Exception) {
+        }
 
         val ip = NetworkUtils.findLocalIPv4()
         if (ip == null) {

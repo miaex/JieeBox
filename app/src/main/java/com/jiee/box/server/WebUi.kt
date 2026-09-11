@@ -51,7 +51,7 @@ object WebUi {
         }
 
         val fileRows = sortedFiles.joinToString("\n") { f ->
-            val iconHtml = if (f.mimeType.startsWith("image")) {
+            val iconHtml = if (f.mimeType.startsWith("image") || f.mimeType.startsWith("video")) {
                 """<span class="file-icon-wrap"><img class="file-thumb" src="/thumbnail?id=${f.id}" loading="lazy" alt=""
                      onerror="this.style.display='none';this.nextElementSibling.style.display='inline'">
                    <span class="file-icon" style="display:none">${iconFor(f.mimeType)}</span></span>"""
@@ -276,32 +276,73 @@ object WebUi {
 
                 var fill = row.querySelector('.upload-bar-fill');
                 var status = row.querySelector('.upload-status');
+                jieeUploadInChunks(file, fill, status, row);
+              });
+            }
+
+            // Big files (video especially) get split into 8MB pieces instead
+            // of one giant request. This is what actually makes very large
+            // uploads (10+ GB) work at all from mobile Safari — a single huge
+            // multipart body can silently exceed the memory a browser allows
+            // one request to hold — and it means a brief Wi-Fi hiccup only
+            // needs to retry the current 8MB piece, not restart the whole file.
+            function jieeUploadInChunks(file, fill, status, row) {
+              var chunkSize = 8 * 1024 * 1024;
+              var totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+              var uploadId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+              var index = 0;
+              var bytesDone = 0;
+
+              function sendChunk(attempt) {
+                if (index >= totalChunks) {
+                  status.textContent = '✅ Envoyé';
+                  fill.style.background = '#F0824E';
+                  fill.style.width = '100%';
+                  return;
+                }
+                var start = index * chunkSize;
+                var end = Math.min(file.size, start + chunkSize);
+                var blob = file.slice(start, end);
+
+                var formData = new FormData();
+                formData.append('uploadId', uploadId);
+                formData.append('index', index);
+                formData.append('totalChunks', totalChunks);
+                formData.append('fileName', file.name);
+                formData.append('chunk', blob, file.name);
 
                 var xhr = new XMLHttpRequest();
-                xhr.open('POST', '/upload', true);
+                xhr.open('POST', '/upload-chunk', true);
                 xhr.upload.onprogress = function (e) {
                   if (e.lengthComputable) {
-                    var pct = Math.round((e.loaded / e.total) * 100);
+                    var pct = Math.min(99, Math.round(((bytesDone + e.loaded) / file.size) * 100));
                     fill.style.width = pct + '%';
                     status.textContent = pct + '%';
                   }
                 };
                 xhr.onload = function () {
                   if (xhr.status === 200) {
-                    status.textContent = '✅ Envoyé';
-                    fill.style.background = '#F0824E';
-                    fill.style.width = '100%';
+                    bytesDone += (end - start);
+                    index++;
+                    sendChunk(0);
+                  } else if (attempt < 3) {
+                    setTimeout(function () { sendChunk(attempt + 1); }, 1200);
                   } else {
                     status.textContent = '❌ ' + xhr.status;
                     row.title = xhr.responseText || 'Erreur inconnue';
                   }
                 };
-                xhr.onerror = function () { status.textContent = '❌ Réseau'; };
-
-                var formData = new FormData();
-                formData.append('file', file, file.name);
+                xhr.onerror = function () {
+                  if (attempt < 3) {
+                    setTimeout(function () { sendChunk(attempt + 1); }, 1200);
+                  } else {
+                    status.textContent = '❌ Réseau';
+                  }
+                };
                 xhr.send(formData);
-              });
+              }
+
+              sendChunk(0);
             }
 
             function jieeSetLang(lang) {

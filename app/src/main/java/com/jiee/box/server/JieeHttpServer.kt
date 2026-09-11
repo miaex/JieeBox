@@ -37,8 +37,8 @@ import java.util.zip.ZipOutputStream
  *   GET  /download?id=xxx   -> streams one published file, with HTTP Range support
  *   GET  /zip?dir=A/B       -> streams a .zip of everything in that folder (V1.1)
  *   GET  /logo.png          -> the app icon artwork, for branding the client page
- *   GET  /thumbnail?id=xxx  -> a small downscaled preview for image files
- *   POST /upload            -> client -> box upload (V2 bidirectional transfer)
+ *   GET  /thumbnail?id=xxx  -> a small downscaled preview for image/video files
+ *   POST /upload-chunk      -> client -> box upload, one chunk at a time (V2, large-file safe)
  */
 class JieeHttpServer(
     port: Int,
@@ -103,7 +103,7 @@ class JieeHttpServer(
                 session.uri == "/zip" -> serveZip(session)
                 session.uri == "/logo.png" -> serveLogo()
                 session.uri == "/thumbnail" -> serveThumbnail(session)
-                session.uri == "/upload" && session.method == Method.POST -> serveUpload(session)
+                session.uri == "/upload-chunk" && session.method == Method.POST -> serveUploadChunk(session)
                 else -> newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found")
             }
         } catch (e: Exception) {
@@ -274,38 +274,29 @@ class JieeHttpServer(
     }
 
     /**
-     * Small downscaled preview for an image file, used by the client page's
-     * gallery-style thumbnails instead of a generic icon. Decoded with
-     * inSampleSize so we never inflate the full-resolution bitmap into memory
-     * just to show a 64px preview.
+     * Small downscaled preview for an image or video file, used by the client
+     * page's gallery-style thumbnails instead of a generic icon. Images are
+     * decoded with inSampleSize so the full-resolution bitmap is never
+     * inflated just to show a 96px preview; videos get one frame pulled via
+     * MediaMetadataRetriever, downscaled the same way, with a small play
+     * triangle drawn on top so it still reads as "video" at a glance.
      */
     private fun serveThumbnail(session: IHTTPSession): Response {
         val id = session.parms["id"]
             ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Missing id")
         val file = repository.getById(id)
             ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Fichier introuvable")
-        if (!file.available || !file.mimeType.startsWith("image")) {
+        if (!file.available) {
             return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Aperçu indisponible")
         }
 
+        val bitmap = when {
+            file.mimeType.startsWith("image") -> decodeImageThumbnail(Uri.parse(file.uri))
+            file.mimeType.startsWith("video") -> decodeVideoThumbnail(Uri.parse(file.uri))
+            else -> null
+        } ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Aperçu indisponible")
+
         return try {
-            val uri = Uri.parse(file.uri)
-            val targetSize = 96
-
-            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use {
-                android.graphics.BitmapFactory.decodeStream(it, null, bounds)
-            }
-            var sample = 1
-            while (bounds.outWidth / (sample * 2) >= targetSize && bounds.outHeight / (sample * 2) >= targetSize) {
-                sample *= 2
-            }
-
-            val decodeOpts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
-            val bitmap = context.contentResolver.openInputStream(uri)?.use {
-                android.graphics.BitmapFactory.decodeStream(it, null, decodeOpts)
-            } ?: return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Aperçu indisponible")
-
             val bytes = ByteArrayOutputStream().use { out ->
                 bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out)
                 out.toByteArray()
@@ -317,6 +308,71 @@ class JieeHttpServer(
             response
         } catch (e: Exception) {
             newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Aperçu indisponible")
+        }
+    }
+
+    private fun decodeImageThumbnail(uri: Uri): android.graphics.Bitmap? {
+        return try {
+            val targetSize = 96
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use {
+                android.graphics.BitmapFactory.decodeStream(it, null, bounds)
+            }
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= targetSize && bounds.outHeight / (sample * 2) >= targetSize) {
+                sample *= 2
+            }
+            val decodeOpts = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            context.contentResolver.openInputStream(uri)?.use {
+                android.graphics.BitmapFactory.decodeStream(it, null, decodeOpts)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun decodeVideoThumbnail(uri: Uri): android.graphics.Bitmap? {
+        val retriever = android.media.MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val frame = retriever.getFrameAtTime(1_000_000L, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.getFrameAtTime(0L, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: return null
+
+            val targetSize = 96
+            val scale = targetSize.toFloat() / maxOf(frame.width, frame.height)
+            val scaled = if (scale < 1f) {
+                android.graphics.Bitmap.createScaledBitmap(
+                    frame, (frame.width * scale).toInt().coerceAtLeast(1), (frame.height * scale).toInt().coerceAtLeast(1), true
+                )
+            } else frame
+
+            // A small play triangle overlay so a video thumbnail still reads
+            // as "video" rather than looking like a still photo.
+            val mutable = scaled.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+            val canvas = android.graphics.Canvas(mutable)
+            val cx = mutable.width / 2f
+            val cy = mutable.height / 2f
+            val r = minOf(mutable.width, mutable.height) / 4f
+            val circlePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.argb(160, 0, 0, 0)
+            }
+            canvas.drawCircle(cx, cy, r, circlePaint)
+            val trianglePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+            }
+            val path = android.graphics.Path().apply {
+                moveTo(cx - r * 0.4f, cy - r * 0.55f)
+                lineTo(cx - r * 0.4f, cy + r * 0.55f)
+                lineTo(cx + r * 0.6f, cy)
+                close()
+            }
+            canvas.drawPath(path, trianglePaint)
+            mutable
+        } catch (_: Exception) {
+            null
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
         }
     }
 
@@ -346,55 +402,91 @@ class JieeHttpServer(
     }
 
     /**
-     * Receives a file uploaded by a client (V2: bidirectional transfer). Saved
-     * straight into the public Downloads area (see [UploadStorage]) and
-     * recorded in [receivedRepository] — visible to the host in the app's
-     * "Fichiers reçus" list, NOT auto-published to other clients (the host
-     * stays in control of what gets re-shared, per the request).
+     * Receives one chunk of a client → box upload (V2, revised for large-file
+     * reliability). The web client splits big files client-side (see
+     * WebUi's upload script) and POSTs each piece separately with an
+     * uploadId/index/totalChunks — this is what actually made a 13+ GB video
+     * uploadable at all from mobile Safari: browsers cap how much a single
+     * request/Blob can hold in memory, and a lone giant multipart POST for
+     * the whole file was hitting that ceiling silently. Once every chunk for
+     * an uploadId has arrived, they're concatenated back into the real file
+     * and handed to the same save/record/notify pipeline as before.
      */
-    private fun serveUpload(session: IHTTPSession): Response {
-        val files = HashMap<String, String>()
-        val fromIp = session.remoteIpAddress ?: "inconnu"
-        val totalExpected = session.headers["content-length"]?.toLongOrNull()
-        val progressWatcher = if (totalExpected != null && totalExpected > 0) {
-            startProgressWatcher(totalExpected, fromIp)
-        } else null
-
+    private fun serveUploadChunk(session: IHTTPSession): Response {
+        val filesMap = HashMap<String, String>()
         return try {
-            session.parseBody(files)
+            session.parseBody(filesMap)
+            val parms = session.parms
+            val fromIp = session.remoteIpAddress ?: "inconnu"
 
-            val tempPath = files["file"]
-                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Aucun fichier reçu")
-            val originalName = session.parms["file"]?.takeIf { it.isNotBlank() } ?: "fichier_recu"
-            val tempFile = File(tempPath)
+            val uploadIdRaw = parms["uploadId"]
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "uploadId manquant")
+            val index = parms["index"]?.toIntOrNull()
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "index manquant")
+            val totalChunks = parms["totalChunks"]?.toIntOrNull()
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "totalChunks manquant")
+            val fileName = parms["fileName"]?.takeIf { it.isNotBlank() } ?: "fichier_recu"
 
-            val saved = UploadStorage.saveIncomingFile(context, tempFile, originalName)
-                ?: return newFixedLengthResponse(
-                    Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Échec de l'enregistrement"
-                )
-            val (savedUri, mimeType) = saved
+            val tempChunkPath = filesMap["chunk"]
+                ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "chunk manquant")
 
-            receivedRepository.add(
-                ReceivedFile(
-                    id = java.util.UUID.randomUUID().toString(),
-                    uri = savedUri.toString(),
-                    displayName = originalName,
-                    size = tempFile.length(),
-                    mimeType = mimeType,
-                    receivedAt = System.currentTimeMillis(),
-                    fromIp = fromIp
-                )
-            )
-            transferLog.log(TransferType.UPLOAD, originalName, fromIp)
-            notifyFileReceived(originalName, fromIp)
+            // uploadId comes from the client — sanitize before using it in a path.
+            val safeUploadId = uploadIdRaw.replace(Regex("[^a-zA-Z0-9_-]"), "").take(64)
+                .ifBlank { return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "uploadId invalide") }
+
+            val chunkDir = File(context.cacheDir, "chunks/$safeUploadId")
+            chunkDir.mkdirs()
+            File(tempChunkPath).copyTo(File(chunkDir, "$index.part"), overwrite = true)
+
+            val percent = (((index + 1).toLong() * 100) / totalChunks).toInt()
+            UploadProgressTracker.update(percent, fromIp)
+
+            val allPartsPresent = (0 until totalChunks).all { File(chunkDir, "$it.part").exists() }
+            if (allPartsPresent) {
+                assembleAndFinishUpload(chunkDir, totalChunks, fileName, fromIp)
+            }
 
             val response = newFixedLengthResponse(Response.Status.OK, "text/plain; charset=utf-8", "OK")
             addNoCacheHeaders(response)
             response
         } catch (e: Exception) {
+            UploadProgressTracker.clear()
             newFixedLengthResponse(Response.Status.INTERNAL_ERROR, MIME_PLAINTEXT, "Erreur d'envoi: ${e.message}")
+        }
+    }
+
+    /** Concatenates every "<index>.part" file back into the original file,
+     *  in order, then reuses the same save/record/notify pipeline a
+     *  single-shot upload used before. */
+    private fun assembleAndFinishUpload(chunkDir: File, totalChunks: Int, fileName: String, fromIp: String) {
+        val assembled = File(context.cacheDir, "assembled_${chunkDir.name}")
+        try {
+            java.io.BufferedOutputStream(java.io.FileOutputStream(assembled), COPY_BUFFER_SIZE).use { out ->
+                for (i in 0 until totalChunks) {
+                    File(chunkDir, "$i.part").inputStream().use { it.copyTo(out, COPY_BUFFER_SIZE) }
+                }
+            }
+
+            val saved = UploadStorage.saveIncomingFile(context, assembled, fileName) ?: return
+            val (savedUri, mimeType) = saved
+            val finalSize = assembled.length()
+
+            receivedRepository.add(
+                ReceivedFile(
+                    id = java.util.UUID.randomUUID().toString(),
+                    uri = savedUri.toString(),
+                    displayName = fileName,
+                    size = finalSize,
+                    mimeType = mimeType,
+                    receivedAt = System.currentTimeMillis(),
+                    fromIp = fromIp
+                )
+            )
+            transferLog.log(TransferType.UPLOAD, fileName, fromIp)
+            notifyFileReceived(fileName, fromIp)
         } finally {
-            progressWatcher?.interrupt()
+            assembled.delete()
+            chunkDir.deleteRecursively()
             UploadProgressTracker.clear()
         }
     }
@@ -427,42 +519,6 @@ class JieeHttpServer(
         } catch (_: Exception) {
             // Notification is a nice-to-have; never let it break the upload itself.
         }
-    }
-
-    /**
-     * NanoHTTPD parses multipart bodies synchronously with no progress
-     * callback, but it does write the incoming file to a real temp file in
-     * our own cache dir (see the java.io.tmpdir fix in JieeBoxApplication) as
-     * it reads. Polling that file's growing size against the request's
-     * Content-Length gives a reasonably accurate live percentage to show on
-     * the host's own screen without touching NanoHTTPD internals.
-     */
-    private fun startProgressWatcher(totalExpected: Long, fromIp: String): Thread {
-        val cacheDir = context.cacheDir
-        val before = cacheDir.listFiles()?.map { it.name }?.toSet() ?: emptySet()
-        val thread = Thread {
-            try {
-                var trackedFile: File? = null
-                while (!Thread.currentThread().isInterrupted) {
-                    if (trackedFile == null) {
-                        trackedFile = cacheDir.listFiles()
-                            ?.filter { it.name !in before }
-                            ?.maxByOrNull { it.lastModified() }
-                    }
-                    val written = trackedFile?.length() ?: 0L
-                    val percent = ((written * 100) / totalExpected).toInt()
-                    UploadProgressTracker.update(percent, fromIp)
-                    Thread.sleep(250)
-                }
-            } catch (_: InterruptedException) {
-                // Normal: interrupted once the upload finishes (see `finally` above).
-            } catch (_: Exception) {
-                // Best-effort progress only — never let this affect the actual upload.
-            }
-        }
-        thread.isDaemon = true
-        thread.start()
-        return thread
     }
 
     /**
